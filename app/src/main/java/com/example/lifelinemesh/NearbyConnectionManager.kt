@@ -8,49 +8,40 @@ import java.nio.charset.StandardCharsets
 
 class NearbyConnectionManager(
     private val context: Context,
-    private val onMessageReceived: (String) -> Unit // We use this to send status updates too!
+    private val onMessageReceived: (String) -> Unit
 ) {
-
+    // 1. USE CLUSTER (Best for Mesh/Offline flexibility)
     private val STRATEGY = Strategy.P2P_CLUSTER
     private val SERVICE_ID = "com.example.lifelinemesh"
 
     private val connectedEndpoints = mutableListOf<String>()
 
-    // 1. START ADVERTISING
     fun startAdvertising(user: String) {
         val advertisingOptions = AdvertisingOptions.Builder().setStrategy(STRATEGY).build()
 
         Nearby.getConnectionsClient(context)
             .startAdvertising(user, SERVICE_ID, connectionLifecycleCallback, advertisingOptions)
             .addOnSuccessListener {
-                Log.d("Lifeline", "Advertising started")
-                // VISUAL CONFIRMATION:
-                onMessageReceived("SYSTEM: Radio ON (Advertising as $user)")
+                onMessageReceived("SYSTEM: Advertising Started")
             }
             .addOnFailureListener { e ->
-                Log.e("Lifeline", "Advertising failed")
-                onMessageReceived("ERROR: Could not start Advertising (${e.message})")
+                onMessageReceived("ERROR: Advertising Failed (${e.message})")
             }
     }
 
-    // 2. START DISCOVERY
     fun startDiscovery() {
         val discoveryOptions = DiscoveryOptions.Builder().setStrategy(STRATEGY).build()
 
         Nearby.getConnectionsClient(context)
             .startDiscovery(SERVICE_ID, endpointDiscoveryCallback, discoveryOptions)
             .addOnSuccessListener {
-                Log.d("Lifeline", "Discovery started")
-                // VISUAL CONFIRMATION:
-                onMessageReceived("SYSTEM: Scanning for nearby peers...")
+                onMessageReceived("SYSTEM: Discovery Started")
             }
             .addOnFailureListener { e ->
-                Log.e("Lifeline", "Discovery failed")
-                onMessageReceived("ERROR: Could not start Scanning (${e.message})")
+                onMessageReceived("ERROR: Discovery Failed (${e.message})")
             }
     }
 
-    // 3. SEND DATA
     fun sendData(message: String) {
         val bytes = message.toByteArray(StandardCharsets.UTF_8)
         val payload = Payload.fromBytes(bytes)
@@ -60,9 +51,9 @@ class NearbyConnectionManager(
     }
 
     fun stop() {
+        Nearby.getConnectionsClient(context).stopAllEndpoints()
         Nearby.getConnectionsClient(context).stopAdvertising()
         Nearby.getConnectionsClient(context).stopDiscovery()
-        Nearby.getConnectionsClient(context).stopAllEndpoints()
         connectedEndpoints.clear()
         onMessageReceived("SYSTEM: Radio Stopped")
     }
@@ -71,25 +62,45 @@ class NearbyConnectionManager(
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            onMessageReceived("SYSTEM: Found Device (${info.endpointName})")
+            onMessageReceived("SYSTEM: Found ${info.endpointName}. Requesting connection...")
+
+            // 2. THE FIX: ADD ERROR LISTENER TO REQUEST
             Nearby.getConnectionsClient(context)
                 .requestConnection("LifelineUser", endpointId, connectionLifecycleCallback)
+                .addOnSuccessListener {
+                    // NOTE: This doesn't mean connected yet. It means request SENT.
+                    onMessageReceived("DEBUG: Request Sent to ${info.endpointName}")
+                }
+                .addOnFailureListener { e ->
+                    // THIS IS WHERE THE HANG HAPPENS
+                    onMessageReceived("ERROR: Request Failed: ${e.message}")
+                }
         }
         override fun onEndpointLost(endpointId: String) {}
     }
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
+            onMessageReceived("SYSTEM: Incoming Connection from ${info.endpointName}...")
+
+            // 3. THE FIX: ADD ERROR LISTENER TO ACCEPT
             Nearby.getConnectionsClient(context).acceptConnection(endpointId, payloadCallback)
+                .addOnFailureListener { e ->
+                    onMessageReceived("ERROR: Could not Accept Connection: ${e.message}")
+                }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             if (result.status.isSuccess) {
                 connectedEndpoints.add(endpointId)
-                // VISUAL CONFIRMATION OF CONNECTION:
-                onMessageReceived("SYSTEM: Connected to ${endpointId}")
+                onMessageReceived("SUCCESS: Connected to ${endpointId}")
+
+                // Stop discovery once connected to save battery/bandwidth (Optional)
+                // Nearby.getConnectionsClient(context).stopDiscovery()
             } else {
-                onMessageReceived("SYSTEM: Connection Failed")
+                if (result.status.statusCode != 8012) {
+                    onMessageReceived("ERROR: Connection Failed (${result.status.statusCode})")
+                }
             }
         }
 

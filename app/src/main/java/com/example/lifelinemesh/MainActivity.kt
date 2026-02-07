@@ -108,10 +108,15 @@ fun PermissionWrapper(onPermissionsGranted: @Composable () -> Unit) {
         Manifest.permission.ACCESS_WIFI_STATE,
         Manifest.permission.CHANGE_WIFI_STATE
     )
+
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
         requiredPermissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
         requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+    }
+
+    if (Build.VERSION.SDK_INT >= 33) {
+        requiredPermissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
     }
 
     // 2. Helper function to check if GPS/Location Switch is ON
