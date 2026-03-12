@@ -1,31 +1,34 @@
 package com.example.lifelinemesh
 
 import android.content.Context
-import android.util.Log
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
 import java.nio.charset.StandardCharsets
 
 class NearbyConnectionManager(
     private val context: Context,
-    private val onMessageReceived: (String) -> Unit
+    private val myName: String,
+    private val onMessageReceived: (String) -> Unit,
+    private val onSystemChatEvent: (String) -> Unit,
+    private val onStatusUpdate: (String) -> Unit,
+    private val onConnectionChanged: (Int) -> Unit
 ) {
-    // 1. USE CLUSTER (Best for Mesh/Offline flexibility)
     private val STRATEGY = Strategy.P2P_CLUSTER
     private val SERVICE_ID = "com.example.lifelinemesh"
 
     private val connectedEndpoints = mutableListOf<String>()
+    private val endpointNames = mutableMapOf<String, String>()
 
-    fun startAdvertising(user: String) {
+    fun startAdvertising() {
         val advertisingOptions = AdvertisingOptions.Builder().setStrategy(STRATEGY).build()
 
         Nearby.getConnectionsClient(context)
-            .startAdvertising(user, SERVICE_ID, connectionLifecycleCallback, advertisingOptions)
+            .startAdvertising(myName, SERVICE_ID, connectionLifecycleCallback, advertisingOptions)
             .addOnSuccessListener {
-                onMessageReceived("SYSTEM: Advertising Started")
+                onStatusUpdate("Advertising as $myName")
             }
             .addOnFailureListener { e ->
-                onMessageReceived("ERROR: Advertising Failed (${e.message})")
+                onStatusUpdate("Advertising Failed: ${e.message}")
             }
     }
 
@@ -35,10 +38,10 @@ class NearbyConnectionManager(
         Nearby.getConnectionsClient(context)
             .startDiscovery(SERVICE_ID, endpointDiscoveryCallback, discoveryOptions)
             .addOnSuccessListener {
-                onMessageReceived("SYSTEM: Discovery Started")
+                onStatusUpdate("Scanning for peers...")
             }
             .addOnFailureListener { e ->
-                onMessageReceived("ERROR: Discovery Failed (${e.message})")
+                onStatusUpdate("Discovery Failed: ${e.message}")
             }
     }
 
@@ -55,25 +58,21 @@ class NearbyConnectionManager(
         Nearby.getConnectionsClient(context).stopAdvertising()
         Nearby.getConnectionsClient(context).stopDiscovery()
         connectedEndpoints.clear()
-        onMessageReceived("SYSTEM: Radio Stopped")
+        endpointNames.clear()
+        onConnectionChanged(0)
+        onStatusUpdate("Radio Stopped")
     }
 
     // --- CALLBACKS ---
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            onMessageReceived("SYSTEM: Found ${info.endpointName}. Requesting connection...")
+            onStatusUpdate("Found ${info.endpointName}. Requesting...")
 
-            // 2. THE FIX: ADD ERROR LISTENER TO REQUEST
             Nearby.getConnectionsClient(context)
-                .requestConnection("LifelineUser", endpointId, connectionLifecycleCallback)
-                .addOnSuccessListener {
-                    // NOTE: This doesn't mean connected yet. It means request SENT.
-                    onMessageReceived("DEBUG: Request Sent to ${info.endpointName}")
-                }
+                .requestConnection(myName, endpointId, connectionLifecycleCallback)
                 .addOnFailureListener { e ->
-                    // THIS IS WHERE THE HANG HAPPENS
-                    onMessageReceived("ERROR: Request Failed: ${e.message}")
+                    onStatusUpdate("Request Failed: ${e.message}")
                 }
         }
         override fun onEndpointLost(endpointId: String) {}
@@ -81,32 +80,41 @@ class NearbyConnectionManager(
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            onMessageReceived("SYSTEM: Incoming Connection from ${info.endpointName}...")
+            endpointNames[endpointId] = info.endpointName
+            onStatusUpdate("Incoming from ${info.endpointName}...")
 
-            // 3. THE FIX: ADD ERROR LISTENER TO ACCEPT
             Nearby.getConnectionsClient(context).acceptConnection(endpointId, payloadCallback)
                 .addOnFailureListener { e ->
-                    onMessageReceived("ERROR: Could not Accept Connection: ${e.message}")
+                    onStatusUpdate("Accept Failed: ${e.message}")
                 }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             if (result.status.isSuccess) {
-                connectedEndpoints.add(endpointId)
-                onMessageReceived("SUCCESS: Connected to ${endpointId}")
+                if (!connectedEndpoints.contains(endpointId)) {
+                    connectedEndpoints.add(endpointId)
 
-                // Stop discovery once connected to save battery/bandwidth (Optional)
-                // Nearby.getConnectionsClient(context).stopDiscovery()
+                    val peerName = endpointNames[endpointId] ?: "Unknown Peer"
+                    onSystemChatEvent("$peerName has joined the mesh")
+
+                    onConnectionChanged(connectedEndpoints.size)
+                    onStatusUpdate("Connected to ${connectedEndpoints.size} device(s)")
+                }
             } else {
                 if (result.status.statusCode != 8012) {
-                    onMessageReceived("ERROR: Connection Failed (${result.status.statusCode})")
+                    onStatusUpdate("Connection Failed (${result.status.statusCode})")
                 }
             }
         }
 
         override fun onDisconnected(endpointId: String) {
             connectedEndpoints.remove(endpointId)
-            onMessageReceived("SYSTEM: Disconnected from $endpointId")
+
+            val peerName = endpointNames.remove(endpointId) ?: "Unknown Peer"
+            onSystemChatEvent("$peerName has left the mesh")
+
+            onConnectionChanged(connectedEndpoints.size)
+            onStatusUpdate("Disconnected from $endpointId")
         }
     }
 
