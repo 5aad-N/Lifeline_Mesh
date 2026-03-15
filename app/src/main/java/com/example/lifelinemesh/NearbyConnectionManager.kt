@@ -18,6 +18,7 @@ class NearbyConnectionManager(
 
     private val connectedEndpoints = mutableListOf<String>()
     private val endpointNames = mutableMapOf<String, String>()
+    private val pendingConnections = mutableSetOf<String>()
 
     fun startAdvertising() {
         val advertisingOptions = AdvertisingOptions.Builder().setStrategy(STRATEGY).build()
@@ -67,19 +68,29 @@ class NearbyConnectionManager(
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+            if (connectedEndpoints.contains(endpointId) || pendingConnections.contains(endpointId)) {
+                return
+            }
+
+            pendingConnections.add(endpointId)
+
             onStatusUpdate("Found ${info.endpointName}. Requesting...")
 
             Nearby.getConnectionsClient(context)
                 .requestConnection(myName, endpointId, connectionLifecycleCallback)
                 .addOnFailureListener { e ->
+                    pendingConnections.remove(endpointId)
                     onStatusUpdate("Request Failed: ${e.message}")
                 }
         }
-        override fun onEndpointLost(endpointId: String) {}
+        override fun onEndpointLost(endpointId: String) {
+            pendingConnections.remove(endpointId)
+        }
     }
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
+            pendingConnections.add(endpointId)
             endpointNames[endpointId] = info.endpointName
             onStatusUpdate("Incoming from ${info.endpointName}...")
 
@@ -90,6 +101,8 @@ class NearbyConnectionManager(
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
+            pendingConnections.remove(endpointId)
+
             if (result.status.isSuccess) {
                 if (!connectedEndpoints.contains(endpointId)) {
                     connectedEndpoints.add(endpointId)
@@ -109,6 +122,7 @@ class NearbyConnectionManager(
 
         override fun onDisconnected(endpointId: String) {
             connectedEndpoints.remove(endpointId)
+            pendingConnections.remove(endpointId)
 
             val peerName = endpointNames.remove(endpointId) ?: "Unknown Peer"
             onSystemChatEvent("$peerName has left the mesh")
