@@ -1,6 +1,7 @@
 package com.example.lifelinemesh
 
 import android.content.Context
+import android.content.Intent
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
 import org.json.JSONObject
@@ -115,6 +116,19 @@ class NearbyConnectionManager(
         }
     }
 
+    private fun updateServiceNotification(count: Int) {
+        val statusText = if (count > 0) {
+            "Connected to $count peer(s). Relaying data..."
+        } else {
+            "Scanning for nearby peers..."
+        }
+
+        val intent = Intent(context, MeshService::class.java).apply {
+            putExtra("STATUS_TEXT", statusText)
+        }
+        context.startService(intent) // This triggers onStartCommand in the service
+    }
+
     // --- CALLBACKS ---
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
@@ -162,6 +176,7 @@ class NearbyConnectionManager(
                     val peerName = endpointNames[endpointId] ?: "Unknown Peer"
                     onSystemChatEvent("$peerName has joined the mesh")
                     onConnectionChanged(connectedEndpoints.size)
+                    updateServiceNotification(connectedEndpoints.size)
                     onStatusUpdate("Connected to ${connectedEndpoints.size} device(s)")
 
                     // NEW: Trigger the targeted, delayed Store-and-Forward sync!
@@ -177,6 +192,7 @@ class NearbyConnectionManager(
             val peerName = endpointNames.remove(endpointId) ?: "Unknown Peer"
             onSystemChatEvent("$peerName has left the mesh")
             onConnectionChanged(connectedEndpoints.size)
+            updateServiceNotification(connectedEndpoints.size)
             onStatusUpdate("Disconnected from $endpointId")
         }
     }

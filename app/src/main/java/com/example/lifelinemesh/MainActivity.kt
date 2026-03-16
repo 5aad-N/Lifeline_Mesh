@@ -49,6 +49,7 @@ import com.example.lifelinemesh.data.MessageEntity
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import kotlinx.coroutines.withContext
+import android.annotation.SuppressLint
 
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
@@ -135,6 +136,7 @@ fun PermissionWrapper(onPermissionsGranted: @Composable () -> Unit) {
 
     if (Build.VERSION.SDK_INT >= 33) {
         requiredPermissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     fun checkLocationService(): Boolean {
@@ -274,6 +276,7 @@ fun LoginScreen(
     }
 }
 
+@SuppressLint("MissingPermission")
 @Composable
 fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -281,7 +284,15 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
 
     val messages = remember { mutableStateListOf<ChatMessage>() }
 
-    // NEW: Load historical UI data from the local database on startup
+    LaunchedEffect(Unit) {
+        val serviceIntent = Intent(context, MeshService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(serviceIntent)
+        } else {
+            context.startService(serviceIntent)
+        }
+    }
+
     LaunchedEffect(Unit) {
         val dao = AppDatabase.getDatabase(context).messageDao()
         val savedMessages = dao.getAllMessages()
@@ -456,54 +467,59 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                 onClick = {
                     Toast.makeText(context, "Acquiring GPS lock...", Toast.LENGTH_SHORT).show()
                     try {
-                        fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-                            .addOnSuccessListener { location ->
-                                if (location != null) {
-                                    val alertText = "🚨 Emergency Location Shared"
-                                    val newLocationMessage = ChatMessage(
-                                        text = alertText,
-                                        isFromMe = true,
-                                        senderName = user.name,
-                                        senderPhone = user.phoneNumber,
-                                        latitude = location.latitude,
-                                        longitude = location.longitude
-                                    )
-                                    messages.add(newLocationMessage)
-
-                                    // 1. Save to Database (Store)
-                                    scope.launch(Dispatchers.IO) {
-                                        val dao = AppDatabase.getDatabase(context).messageDao()
-                                        dao.insertMessage(
-                                            MessageEntity(
-                                                id = newLocationMessage.id,
-                                                text = alertText,
-                                                isFromMe = true,
-                                                senderName = user.name,
-                                                senderPhone = user.phoneNumber,
-                                                latitude = location.latitude,
-                                                longitude = location.longitude,
-                                                timestamp = System.currentTimeMillis(),
-                                                priority = 3 // CRITICAL priority for GPS
-                                            )
+                        // FIX: Add explicit permission check to satisfy Android Studio Lint
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                                .addOnSuccessListener { location ->
+                                    if (location != null) {
+                                        val alertText = "🚨 Emergency Location Shared"
+                                        val newLocationMessage = ChatMessage(
+                                            text = alertText,
+                                            isFromMe = true,
+                                            senderName = user.name,
+                                            senderPhone = user.phoneNumber,
+                                            latitude = location.latitude,
+                                            longitude = location.longitude
                                         )
-                                    }
+                                        messages.add(newLocationMessage)
 
-                                    // 2. Attempt to send immediately (Forward)
-                                    nearbyManager.sendData(
-                                        messageId = newLocationMessage.id,
-                                        message = alertText,
-                                        senderName = user.name,
-                                        senderPhone = user.phoneNumber,
-                                        lat = location.latitude,
-                                        lng = location.longitude
-                                    )
-                                } else {
-                                    Toast.makeText(context, "Ensure GPS is turned on and you are outdoors.", Toast.LENGTH_LONG).show()
+                                        // 1. Save to Database (Store)
+                                        scope.launch(Dispatchers.IO) {
+                                            val dao = AppDatabase.getDatabase(context).messageDao()
+                                            dao.insertMessage(
+                                                MessageEntity(
+                                                    id = newLocationMessage.id,
+                                                    text = alertText,
+                                                    isFromMe = true,
+                                                    senderName = user.name,
+                                                    senderPhone = user.phoneNumber,
+                                                    latitude = location.latitude,
+                                                    longitude = location.longitude,
+                                                    timestamp = System.currentTimeMillis(),
+                                                    priority = 3 // CRITICAL priority for GPS
+                                                )
+                                            )
+                                        }
+
+                                        // 2. Attempt to send immediately (Forward)
+                                        nearbyManager.sendData(
+                                            messageId = newLocationMessage.id,
+                                            message = alertText,
+                                            senderName = user.name,
+                                            senderPhone = user.phoneNumber,
+                                            lat = location.latitude,
+                                            lng = location.longitude
+                                        )
+                                    } else {
+                                        Toast.makeText(context, "Ensure GPS is turned on and you are outdoors.", Toast.LENGTH_LONG).show()
+                                    }
                                 }
-                            }
-                            .addOnFailureListener {
-                                Toast.makeText(context, "Failed to get location.", Toast.LENGTH_SHORT).show()
-                            }
+                                .addOnFailureListener {
+                                    Toast.makeText(context, "Failed to get location.", Toast.LENGTH_SHORT).show()
+                                }
+                        } else {
+                            Toast.makeText(context, "Location permission missing.", Toast.LENGTH_SHORT).show()
+                        }
                     } catch (e: SecurityException) {
                         Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
                     }
