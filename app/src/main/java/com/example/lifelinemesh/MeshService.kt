@@ -9,6 +9,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 
 class MeshService : Service() {
+    private var nearbyManager: NearbyConnectionManager? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -36,10 +37,33 @@ class MeshService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val newStatus = intent?.getStringExtra("STATUS_TEXT")
-        if (newStatus != null) {
-            updateNotification(newStatus)
+        val userName = intent?.getStringExtra("USER_NAME") ?: "Mule"
+        val statusText = intent?.getStringExtra("STATUS_TEXT")
+
+        if (nearbyManager == null && intent?.hasExtra("USER_NAME") == true) {
+            // The Service now owns the mesh radio!
+            nearbyManager = NearbyConnectionManager(
+                context = this,
+                myName = userName,
+                onMessageReceived = { text, name, phone, lat, lng ->
+                    // Broadcast to UI if it's open
+                    sendBroadcast(Intent("MESH_MESSAGE_RECEIVED").apply {
+                        putExtra("text", text)
+                        putExtra("name", name)
+                        putExtra("phone", phone)
+                        putExtra("lat", lat)
+                        putExtra("lng", lng)
+                    })
+                },
+                onSystemChatEvent = { /* Log or broadcast */ },
+                onStatusUpdate = { /* Update notification */ },
+                onConnectionChanged = { count -> updateNotification("Connected to $count peers") }
+            )
+            nearbyManager?.startAdvertising()
+            nearbyManager?.startDiscovery()
         }
+
+        if (statusText != null) updateNotification(statusText)
         return START_STICKY
     }
 

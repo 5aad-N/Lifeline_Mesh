@@ -95,11 +95,21 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppContent(modifier: Modifier = Modifier) {
-    var currentUser by remember { mutableStateOf<UserProfile?>(null) }
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("lifeline_prefs", Context.MODE_PRIVATE) }
+    var currentUser by remember {
+        mutableStateOf(
+            prefs.getString("user_name", null)?.let { name ->
+                UserProfile(name, prefs.getString("user_phone", "") ?: "")
+            }
+        )
+    }
 
     if (currentUser == null) {
         LoginScreen(
             onLoginSuccess = { name, phone ->
+                // Save to disk
+                prefs.edit().putString("user_name", name).putString("user_phone", phone).apply()
                 currentUser = UserProfile(name, phone)
             },
             modifier = modifier
@@ -284,8 +294,10 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
 
     val messages = remember { mutableStateListOf<ChatMessage>() }
 
-    LaunchedEffect(Unit) {
-        val serviceIntent = Intent(context, MeshService::class.java)
+    LaunchedEffect(user) {
+        val serviceIntent = Intent(context, MeshService::class.java).apply {
+            putExtra("USER_NAME", user.name)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent)
         } else {
@@ -312,6 +324,46 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
             )
         }
     }
+
+    // Listen for background messages from the MeshService
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    DisposableEffect(context) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val text = intent?.getStringExtra("text") ?: ""
+                val name = intent?.getStringExtra("name") ?: "Unknown"
+                val phone = intent?.getStringExtra("phone") ?: ""
+                val lat = if (intent?.hasExtra("lat") == true) intent.getDoubleExtra("lat", 0.0) else null
+                val lng = if (intent?.hasExtra("lng") == true) intent.getDoubleExtra("lng", 0.0) else null
+
+                messages.add(
+                    ChatMessage(
+                        text = text,
+                        isFromMe = false,
+                        senderName = name,
+                        senderPhone = phone,
+                        latitude = lat,
+                        longitude = lng
+                    )
+                )
+            }
+        }
+
+        val filter = android.content.IntentFilter("MESH_MESSAGE_RECEIVED")
+
+        // FIX: Explicitly check for API 33+ (Tiramisu) and provide the NOT_EXPORTED flag
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            // For older versions, the flag isn't required/supported
+            context.registerReceiver(receiver, filter)
+        }
+
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
+    }
+
     var currentText by remember { mutableStateOf("") }
     var systemStatus by remember { mutableStateOf("Initializing Radio...") }
     var activeConnections by remember { mutableIntStateOf(0) }
@@ -398,7 +450,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                             fontWeight = FontWeight.Bold
                         )
 
-                        // NEW: Clear Database Button
+                        // Clear Database Button
                         IconButton(
                             onClick = {
                                 scope.launch(Dispatchers.IO) {
@@ -444,7 +496,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                 }
             }
 
-            // NEW: itemsIndexed lets us look at the previous message!
+            // itemsIndexed lets us look at the previous message!
             itemsIndexed(messages) { index, message ->
                 val isFirstMessage = index == 0
                 val previousMessage = if (!isFirstMessage) messages[index - 1] else null
@@ -607,14 +659,14 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
         ) {
             Surface(
                 color = bubbleColor,
-                // NEW: Dynamic corners for that WhatsApp "tail" effect
+                // Dynamic corners for that WhatsApp "tail" effect
                 shape = RoundedCornerShape(
                     topStart = 12.dp,
                     topEnd = 12.dp,
                     bottomStart = if (message.isFromMe || !showHeader) 12.dp else 2.dp,
                     bottomEnd = if (!message.isFromMe || !showHeader) 12.dp else 2.dp
                 ),
-                // NEW: Tighter vertical padding if it's a grouped message
+                // Tighter vertical padding if it's a grouped message
                 modifier = Modifier.padding(
                     start = 8.dp,
                     top = if (showHeader) 8.dp else 2.dp,
@@ -650,7 +702,7 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
                         color = textColor
                     )
 
-                    // NEW: Draw the location data if it exists
+                    // Draw the location data if it exists
                     if (message.latitude != null && message.longitude != null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Surface(
