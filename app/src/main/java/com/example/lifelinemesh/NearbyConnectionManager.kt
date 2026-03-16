@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import com.example.lifelinemesh.data.AppDatabase
 import com.example.lifelinemesh.data.MessageEntity
+import kotlinx.coroutines.delay
 
 class NearbyConnectionManager(
     private val context: Context,
@@ -82,6 +83,38 @@ class NearbyConnectionManager(
         onStatusUpdate("Radio Stopped")
     }
 
+    private fun syncDatabaseWithPeer(newEndpointId: String) {
+        CoroutineScope(Dispatchers.IO).launch {
+            // Give the Bluetooth socket 1.5 seconds to fully open before blasting data
+            delay(1500)
+
+            val dao = AppDatabase.getDatabase(context).messageDao()
+            val pendingMessages = dao.getMessagesForForwarding()
+
+            for (msg in pendingMessages) {
+                val jsonEnvelope = JSONObject()
+                jsonEnvelope.put("messageId", msg.id)
+                jsonEnvelope.put("text", msg.text)
+                jsonEnvelope.put("senderName", msg.senderName)
+                jsonEnvelope.put("senderPhone", msg.senderPhone)
+
+                if (msg.latitude != null && msg.longitude != null) {
+                    jsonEnvelope.put("latitude", msg.latitude)
+                    jsonEnvelope.put("longitude", msg.longitude)
+                    jsonEnvelope.put("hasLocation", true)
+                } else {
+                    jsonEnvelope.put("hasLocation", false)
+                }
+
+                val bytes = jsonEnvelope.toString().toByteArray(StandardCharsets.UTF_8)
+                val payload = Payload.fromBytes(bytes)
+
+                // CRITICAL FIX: Send ONLY to the newly connected endpoint, not everyone.
+                Nearby.getConnectionsClient(context).sendPayload(newEndpointId, payload)
+            }
+        }
+    }
+
     // --- CALLBACKS ---
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
@@ -131,22 +164,8 @@ class NearbyConnectionManager(
                     onConnectionChanged(connectedEndpoints.size)
                     onStatusUpdate("Connected to ${connectedEndpoints.size} device(s)")
 
-                    // NEW: Trigger Store-and-Forward sync!
-                    CoroutineScope(Dispatchers.IO).launch {
-                        val dao = AppDatabase.getDatabase(context).messageDao()
-                        val pendingMessages = dao.getMessagesForForwarding()
-
-                        for (msg in pendingMessages) {
-                            sendData(
-                                messageId = msg.id,
-                                message = msg.text,
-                                senderName = msg.senderName,
-                                senderPhone = msg.senderPhone,
-                                lat = msg.latitude,
-                                lng = msg.longitude
-                            )
-                        }
-                    }
+                    // NEW: Trigger the targeted, delayed Store-and-Forward sync!
+                    syncDatabaseWithPeer(endpointId)
                 }
             } else if (result.status.statusCode != 8012) {
                 onStatusUpdate("Connection Failed (${result.status.statusCode})")

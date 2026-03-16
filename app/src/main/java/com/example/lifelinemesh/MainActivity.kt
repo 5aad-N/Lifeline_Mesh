@@ -46,6 +46,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import com.example.lifelinemesh.data.AppDatabase
 import com.example.lifelinemesh.data.MessageEntity
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import kotlinx.coroutines.withContext
 
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
@@ -277,6 +280,27 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
 
     val messages = remember { mutableStateListOf<ChatMessage>() }
+
+    // NEW: Load historical UI data from the local database on startup
+    LaunchedEffect(Unit) {
+        val dao = AppDatabase.getDatabase(context).messageDao()
+        val savedMessages = dao.getAllMessages()
+
+        for (msg in savedMessages) {
+            messages.add(
+                ChatMessage(
+                    id = msg.id,
+                    text = msg.text,
+                    isFromMe = msg.isFromMe,
+                    senderName = msg.senderName,
+                    senderPhone = msg.senderPhone,
+                    latitude = msg.latitude,
+                    longitude = msg.longitude,
+                    timestamp = msg.timestamp
+                )
+            )
+        }
+    }
     var currentText by remember { mutableStateOf("") }
     var systemStatus by remember { mutableStateOf("Initializing Radio...") }
     var activeConnections by remember { mutableIntStateOf(0) }
@@ -362,6 +386,28 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold
                         )
+
+                        // NEW: Clear Database Button
+                        IconButton(
+                            onClick = {
+                                scope.launch(Dispatchers.IO) {
+                                    // 1. Wipe the physical SQLite database
+                                    AppDatabase.getDatabase(context).messageDao().clearAllMessages()
+
+                                    // 2. Wipe the UI state on the Main thread
+                                    withContext(Dispatchers.Main) {
+                                        messages.clear()
+                                        Toast.makeText(context, "Mesh History Cleared", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Clear Mesh",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
                     }
                 }
 
