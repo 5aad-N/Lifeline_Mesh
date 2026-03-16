@@ -5,6 +5,8 @@ import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.nearby.connection.ConnectionsStatusCodes
 
 class NearbyConnectionManager(
     private val context: Context,
@@ -75,7 +77,10 @@ class NearbyConnectionManager(
                 .requestConnection(myName, endpointId, connectionLifecycleCallback)
                 .addOnFailureListener { e ->
                     pendingConnections.remove(endpointId)
-                    onStatusUpdate("Request Failed: ${e.message}")
+
+                    if (e !is ApiException || e.statusCode != ConnectionsStatusCodes.STATUS_ENDPOINT_IO_ERROR) {
+                        onStatusUpdate("Request Failed: ${e.message}")
+                    }
                 }
         }
         override fun onEndpointLost(endpointId: String) {
@@ -92,7 +97,10 @@ class NearbyConnectionManager(
             Nearby.getConnectionsClient(context).acceptConnection(endpointId, payloadCallback)
                 .addOnFailureListener { e ->
                     pendingConnections.remove(endpointId)
-                    onStatusUpdate("Accept Failed: ${e.message}")
+
+                    if (e !is ApiException || e.statusCode != ConnectionsStatusCodes.STATUS_ENDPOINT_IO_ERROR) {
+                        onStatusUpdate("Request Failed: ${e.message}")
+                    }
                 }
         }
 

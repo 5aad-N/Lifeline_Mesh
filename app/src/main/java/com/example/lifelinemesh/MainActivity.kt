@@ -420,46 +420,6 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                 Text("Send")
             }
         }
-
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            Button(
-                onClick = {
-                    activeConnections += 1
-                    systemStatus = "Dev Mode: Connected to $activeConnections device(s)"
-                    messages.add(
-                        ChatMessage(
-                            text = "Mock Friend has joined the mesh",
-                            isFromMe = false,
-                            isSystemEvent = true
-                        )
-                    )
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
-            ) {
-                Text("Mock Connect")
-            }
-
-            Button(
-                onClick = {
-                    messages.add(
-                        ChatMessage(
-                            text = "This is a test message from a mock peer!",
-                            isFromMe = false,
-                            senderName = "Soren",
-                            senderPhone = "555-0199"
-                        )
-                    )
-                },
-                enabled = activeConnections > 0,
-                colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
-            ) {
-                Text("Mock Receive")
-            }
-        }
     }
 }
 
