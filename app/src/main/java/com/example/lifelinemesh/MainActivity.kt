@@ -17,7 +17,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -39,6 +43,8 @@ import com.example.lifelinemesh.ui.theme.LifelineMeshTheme
 data class ChatMessage(
     val text: String,
     val isFromMe: Boolean,
+    val senderName: String = "",
+    val senderPhone: String = "",
     val isSystemEvent: Boolean = false,
     val timestamp: Long = System.currentTimeMillis()
 )
@@ -63,7 +69,8 @@ class MainActivity : ComponentActivity() {
                             detectTapGestures(onTap = {
                                 focusManager.clearFocus()
                             })
-                        }
+                        },
+                    contentWindowInsets = WindowInsets.safeDrawing
                 ) { innerPadding ->
                     AppContent(modifier = Modifier.padding(innerPadding))
                 }
@@ -266,12 +273,33 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
 
     val focusManager = LocalFocusManager.current
 
+    val listState = rememberLazyListState()
+
+    // 2. The tracker that measures how tall the keyboard is right now
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+
+    // 3. The Auto-Scroll Trigger!
+    // This fires instantly whenever the message list grows OR the keyboard pops up
+    LaunchedEffect(messages.size, imeBottom) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
     val nearbyManager = remember {
         NearbyConnectionManager(
             context = context,
             myName = user.name,
-            onMessageReceived = { incomingText ->
-                messages.add(ChatMessage(incomingText, isFromMe = false))
+            // NEW: We receive the text, name, and phone from the JSON envelope
+            onMessageReceived = { incomingText, senderName, senderPhone ->
+                messages.add(
+                    ChatMessage(
+                        text = incomingText,
+                        isFromMe = false,
+                        senderName = senderName,
+                        senderPhone = senderPhone // Actually save the phone number!
+                    )
+                )
             },
             onSystemChatEvent = { eventText ->
                 messages.add(ChatMessage(text = eventText, isFromMe = false, isSystemEvent = true))
@@ -336,6 +364,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
 
         LazyColumn(
             modifier = Modifier.weight(1f).padding(8.dp),
+            state = listState
         ) {
             if (messages.isEmpty()) {
                 item {
@@ -344,7 +373,20 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                     }
                 }
             }
-            items(messages) { message -> MessageBubble(message) }
+
+            // NEW: itemsIndexed lets us look at the previous message!
+            itemsIndexed(messages) { index, message ->
+                val isFirstMessage = index == 0
+                val previousMessage = if (!isFirstMessage) messages[index - 1] else null
+
+                // Decide if we should show the header based on the previous message
+                val showHeader = isFirstMessage ||
+                        previousMessage?.isSystemEvent == true ||
+                        previousMessage?.senderName != message.senderName ||
+                        previousMessage?.isFromMe != message.isFromMe
+
+                MessageBubble(message = message, showHeader = showHeader)
+            }
         }
 
         Row(
@@ -365,8 +407,11 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                     focusManager.clearFocus()
                     if (currentText.isNotBlank()) {
                         val msgToSend = currentText
-                        messages.add(ChatMessage(msgToSend, true))
-                        nearbyManager.sendData(msgToSend)
+
+                        messages.add(ChatMessage(msgToSend, isFromMe = true, senderName = user.name, senderPhone = user.phoneNumber))
+
+                        nearbyManager.sendData(msgToSend, user.name, user.phoneNumber)
+
                         currentText = ""
                     }
                 },
@@ -400,7 +445,14 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
 
             Button(
                 onClick = {
-                    messages.add(ChatMessage("This is a test message from a mock peer!", isFromMe = false))
+                    messages.add(
+                        ChatMessage(
+                            text = "This is a test message from a mock peer!",
+                            isFromMe = false,
+                            senderName = "Soren",
+                            senderPhone = "555-0199"
+                        )
+                    )
                 },
                 enabled = activeConnections > 0,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
@@ -412,19 +464,13 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun MessageBubble(message: ChatMessage) {
+fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
     if (message.isSystemEvent) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = message.text,
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.Gray
-            )
+            Text(text = message.text, style = MaterialTheme.typography.labelMedium, color = Color.Gray)
         }
     } else {
         val bubbleColor = if (message.isFromMe) MaterialTheme.colorScheme.primary else Color.LightGray
@@ -437,14 +483,49 @@ fun MessageBubble(message: ChatMessage) {
         ) {
             Surface(
                 color = bubbleColor,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.padding(vertical = 4.dp, horizontal = 8.dp)
-            ) {
-                Text(
-                    text = message.text,
-                    modifier = Modifier.padding(10.dp),
-                    color = textColor
+                // NEW: Dynamic corners for that WhatsApp "tail" effect
+                shape = RoundedCornerShape(
+                    topStart = 12.dp,
+                    topEnd = 12.dp,
+                    bottomStart = if (message.isFromMe || !showHeader) 12.dp else 2.dp,
+                    bottomEnd = if (!message.isFromMe || !showHeader) 12.dp else 2.dp
+                ),
+                // NEW: Tighter vertical padding if it's a grouped message
+                modifier = Modifier.padding(
+                    start = 8.dp,
+                    top = if (showHeader) 8.dp else 2.dp,
+                    end = 8.dp,
+                    bottom = 2.dp
                 )
+            ) {
+                Column(modifier = Modifier.padding(8.dp)) {
+
+                    // --- THE WHATSAPP HEADER ---
+                    // Only show on incoming messages when showHeader is true
+                    if (showHeader && !message.isFromMe && message.senderName.isNotEmpty()) {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = message.senderName,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary, // Pop of color for the name
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "~ ${message.senderPhone}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.DarkGray
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                    }
+
+                    // --- THE MESSAGE TEXT ---
+                    Text(
+                        text = message.text,
+                        color = textColor
+                    )
+                }
             }
         }
     }

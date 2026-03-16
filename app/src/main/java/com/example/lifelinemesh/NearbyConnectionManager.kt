@@ -3,12 +3,13 @@ package com.example.lifelinemesh
 import android.content.Context
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
+import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 
 class NearbyConnectionManager(
     private val context: Context,
     private val myName: String,
-    private val onMessageReceived: (String) -> Unit,
+    private val onMessageReceived: (String, String, String) -> Unit,
     private val onSystemChatEvent: (String) -> Unit,
     private val onStatusUpdate: (String) -> Unit,
     private val onConnectionChanged: (Int) -> Unit
@@ -22,33 +23,30 @@ class NearbyConnectionManager(
 
     fun startAdvertising() {
         val advertisingOptions = AdvertisingOptions.Builder().setStrategy(STRATEGY).build()
-
         Nearby.getConnectionsClient(context)
             .startAdvertising(myName, SERVICE_ID, connectionLifecycleCallback, advertisingOptions)
-            .addOnSuccessListener {
-                onStatusUpdate("Advertising as $myName")
-            }
-            .addOnFailureListener { e ->
-                onStatusUpdate("Advertising Failed: ${e.message}")
-            }
+            .addOnSuccessListener { onStatusUpdate("Advertising as $myName") }
+            .addOnFailureListener { e -> onStatusUpdate("Advertising Failed: ${e.message}") }
     }
 
     fun startDiscovery() {
         val discoveryOptions = DiscoveryOptions.Builder().setStrategy(STRATEGY).build()
-
         Nearby.getConnectionsClient(context)
             .startDiscovery(SERVICE_ID, endpointDiscoveryCallback, discoveryOptions)
-            .addOnSuccessListener {
-                onStatusUpdate("Scanning for peers...")
-            }
-            .addOnFailureListener { e ->
-                onStatusUpdate("Discovery Failed: ${e.message}")
-            }
+            .addOnSuccessListener { onStatusUpdate("Scanning for peers...") }
+            .addOnFailureListener { e -> onStatusUpdate("Discovery Failed: ${e.message}") }
     }
 
-    fun sendData(message: String) {
-        val bytes = message.toByteArray(StandardCharsets.UTF_8)
+    // --- THE FIX: BUILDING THE JSON ENVELOPE ---
+    fun sendData(message: String, senderName: String, senderPhone: String) {
+        val jsonEnvelope = JSONObject()
+        jsonEnvelope.put("text", message)
+        jsonEnvelope.put("senderName", senderName)
+        jsonEnvelope.put("senderPhone", senderPhone)
+
+        val bytes = jsonEnvelope.toString().toByteArray(StandardCharsets.UTF_8)
         val payload = Payload.fromBytes(bytes)
+
         if (connectedEndpoints.isNotEmpty()) {
             Nearby.getConnectionsClient(context).sendPayload(connectedEndpoints, payload)
         }
@@ -60,6 +58,7 @@ class NearbyConnectionManager(
         Nearby.getConnectionsClient(context).stopDiscovery()
         connectedEndpoints.clear()
         endpointNames.clear()
+        pendingConnections.clear()
         onConnectionChanged(0)
         onStatusUpdate("Radio Stopped")
     }
@@ -68,12 +67,8 @@ class NearbyConnectionManager(
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            if (connectedEndpoints.contains(endpointId) || pendingConnections.contains(endpointId)) {
-                return
-            }
-
+            if (connectedEndpoints.contains(endpointId) || pendingConnections.contains(endpointId)) return
             pendingConnections.add(endpointId)
-
             onStatusUpdate("Found ${info.endpointName}. Requesting...")
 
             Nearby.getConnectionsClient(context)
@@ -96,37 +91,30 @@ class NearbyConnectionManager(
 
             Nearby.getConnectionsClient(context).acceptConnection(endpointId, payloadCallback)
                 .addOnFailureListener { e ->
+                    pendingConnections.remove(endpointId)
                     onStatusUpdate("Accept Failed: ${e.message}")
                 }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             pendingConnections.remove(endpointId)
-
             if (result.status.isSuccess) {
                 if (!connectedEndpoints.contains(endpointId)) {
                     connectedEndpoints.add(endpointId)
-
                     val peerName = endpointNames[endpointId] ?: "Unknown Peer"
                     onSystemChatEvent("$peerName has joined the mesh")
-
                     onConnectionChanged(connectedEndpoints.size)
                     onStatusUpdate("Connected to ${connectedEndpoints.size} device(s)")
                 }
-            } else {
-                if (result.status.statusCode != 8012) {
-                    onStatusUpdate("Connection Failed (${result.status.statusCode})")
-                }
+            } else if (result.status.statusCode != 8012) {
+                onStatusUpdate("Connection Failed (${result.status.statusCode})")
             }
         }
-
         override fun onDisconnected(endpointId: String) {
             connectedEndpoints.remove(endpointId)
             pendingConnections.remove(endpointId)
-
             val peerName = endpointNames.remove(endpointId) ?: "Unknown Peer"
             onSystemChatEvent("$peerName has left the mesh")
-
             onConnectionChanged(connectedEndpoints.size)
             onStatusUpdate("Disconnected from $endpointId")
         }
@@ -134,9 +122,24 @@ class NearbyConnectionManager(
 
     private val payloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
-            payload.asBytes()?.let {
-                val message = String(it, StandardCharsets.UTF_8)
-                onMessageReceived(message)
+            payload.asBytes()?.let { bytes ->
+                try {
+                    // --- THE FIX: OPENING THE JSON ENVELOPE ---
+                    val jsonString = String(bytes, StandardCharsets.UTF_8)
+                    val jsonEnvelope = JSONObject(jsonString)
+
+                    val text = jsonEnvelope.getString("text")
+                    val senderName = jsonEnvelope.getString("senderName")
+                    val senderPhone = jsonEnvelope.getString("senderPhone")
+
+                    // Pass all three pieces of data up to the UI!
+                    onMessageReceived(text, senderName, senderPhone)
+
+                } catch (e: Exception) {
+                    // Fallback just in case an old plain-text message sneaks through
+                    val rawText = String(bytes, StandardCharsets.UTF_8)
+                    onMessageReceived(rawText, "Unknown", "Unknown")
+                }
             }
         }
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
