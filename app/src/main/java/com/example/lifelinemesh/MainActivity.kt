@@ -39,12 +39,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.lifelinemesh.ui.theme.LifelineMeshTheme
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 
 data class ChatMessage(
     val text: String,
     val isFromMe: Boolean,
     val senderName: String = "",
     val senderPhone: String = "",
+    val latitude: Double? = null,
+    val longitude: Double? = null,
     val isSystemEvent: Boolean = false,
     val timestamp: Long = System.currentTimeMillis()
 )
@@ -269,9 +273,11 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var currentText by remember { mutableStateOf("") }
     var systemStatus by remember { mutableStateOf("Initializing Radio...") }
-    var activeConnections by remember { mutableStateOf(0) }
+    var activeConnections by remember { mutableIntStateOf(0) }
 
     val focusManager = LocalFocusManager.current
+
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
     val listState = rememberLazyListState()
 
@@ -290,14 +296,15 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
         NearbyConnectionManager(
             context = context,
             myName = user.name,
-            // NEW: We receive the text, name, and phone from the JSON envelope
-            onMessageReceived = { incomingText, senderName, senderPhone ->
+            onMessageReceived = { incomingText, senderName, senderPhone, lat, lng ->
                 messages.add(
                     ChatMessage(
                         text = incomingText,
                         isFromMe = false,
                         senderName = senderName,
-                        senderPhone = senderPhone // Actually save the phone number!
+                        senderPhone = senderPhone,
+                        latitude = lat,
+                        longitude = lng
                     )
                 )
             },
@@ -383,7 +390,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                 val showHeader = isFirstMessage ||
                         previousMessage?.isSystemEvent == true ||
                         previousMessage?.senderName != message.senderName ||
-                        previousMessage?.isFromMe != message.isFromMe
+                        previousMessage.isFromMe != message.isFromMe
 
                 MessageBubble(message = message, showHeader = showHeader)
             }
@@ -393,6 +400,43 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth().padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            IconButton(
+                onClick = {
+                    Toast.makeText(context, "Acquiring GPS lock...", Toast.LENGTH_SHORT).show()
+
+                    try {
+                        // THIS forces the antenna on and demands a fresh, highly accurate coordinate
+                        fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                            .addOnSuccessListener { location ->
+                                if (location != null) {
+                                    val alertText = "🚨 Emergency Location Shared"
+                                    messages.add(
+                                        ChatMessage(
+                                            text = alertText,
+                                            isFromMe = true,
+                                            senderName = user.name,
+                                            senderPhone = user.phoneNumber,
+                                            latitude = location.latitude,
+                                            longitude = location.longitude
+                                        )
+                                    )
+                                    nearbyManager.sendData(alertText, user.name, user.phoneNumber, location.latitude, location.longitude)
+                                } else {
+                                    Toast.makeText(context, "Ensure GPS is turned on and you are outdoors.", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                            .addOnFailureListener {
+                                Toast.makeText(context, "Failed to get location.", Toast.LENGTH_SHORT).show()
+                            }
+                    } catch (e: SecurityException) {
+                        Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                enabled = activeConnections > 0
+            ) {
+                Text("📍", fontSize = 24.sp)
+            }
+
             TextField(
                 value = currentText,
                 onValueChange = { currentText = it },
@@ -410,7 +454,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
 
                         messages.add(ChatMessage(msgToSend, isFromMe = true, senderName = user.name, senderPhone = user.phoneNumber))
 
-                        nearbyManager.sendData(msgToSend, user.name, user.phoneNumber)
+                        nearbyManager.sendData(msgToSend, user.name, user.phoneNumber, null, null)
 
                         currentText = ""
                     }
@@ -485,6 +529,22 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
                         text = message.text,
                         color = textColor
                     )
+
+                    // NEW: Draw the location data if it exists
+                    if (message.latitude != null && message.longitude != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = "Lat: ${"%.4f".format(message.latitude)}\nLng: ${"%.4f".format(message.longitude)}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = textColor,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

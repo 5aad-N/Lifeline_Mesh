@@ -11,7 +11,7 @@ import com.google.android.gms.nearby.connection.ConnectionsStatusCodes
 class NearbyConnectionManager(
     private val context: Context,
     private val myName: String,
-    private val onMessageReceived: (String, String, String) -> Unit,
+    private val onMessageReceived: (String, String, String, Double?, Double?) -> Unit,
     private val onSystemChatEvent: (String) -> Unit,
     private val onStatusUpdate: (String) -> Unit,
     private val onConnectionChanged: (Int) -> Unit
@@ -40,11 +40,20 @@ class NearbyConnectionManager(
     }
 
     // --- THE FIX: BUILDING THE JSON ENVELOPE ---
-    fun sendData(message: String, senderName: String, senderPhone: String) {
+    fun sendData(message: String, senderName: String, senderPhone: String, lat: Double? = null, lng: Double? = null) {
         val jsonEnvelope = JSONObject()
         jsonEnvelope.put("text", message)
         jsonEnvelope.put("senderName", senderName)
         jsonEnvelope.put("senderPhone", senderPhone)
+
+        // NEW: If we have coordinates, add them to the envelope
+        if (lat != null && lng != null) {
+            jsonEnvelope.put("latitude", lat)
+            jsonEnvelope.put("longitude", lng)
+            jsonEnvelope.put("hasLocation", true)
+        } else {
+            jsonEnvelope.put("hasLocation", false)
+        }
 
         val bytes = jsonEnvelope.toString().toByteArray(StandardCharsets.UTF_8)
         val payload = Payload.fromBytes(bytes)
@@ -140,13 +149,18 @@ class NearbyConnectionManager(
                     val senderName = jsonEnvelope.getString("senderName")
                     val senderPhone = jsonEnvelope.getString("senderPhone")
 
-                    // Pass all three pieces of data up to the UI!
-                    onMessageReceived(text, senderName, senderPhone)
+                    // NEW: Safely extract coordinates if they exist
+                    val hasLocation = jsonEnvelope.optBoolean("hasLocation", false)
+                    val lat = if (hasLocation) jsonEnvelope.getDouble("latitude") else null
+                    val lng = if (hasLocation) jsonEnvelope.getDouble("longitude") else null
+
+                    // Pass all data up to the UI!
+                    onMessageReceived(text, senderName, senderPhone, lat, lng)
 
                 } catch (e: Exception) {
                     // Fallback just in case an old plain-text message sneaks through
                     val rawText = String(bytes, StandardCharsets.UTF_8)
-                    onMessageReceived(rawText, "Unknown", "Unknown")
+                    onMessageReceived(rawText, "Unknown", "Unknown", null, null)
                 }
             }
         }
