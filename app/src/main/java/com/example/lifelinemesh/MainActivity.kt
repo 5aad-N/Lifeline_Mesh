@@ -42,6 +42,10 @@ import com.example.lifelinemesh.ui.theme.LifelineMeshTheme
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import com.example.lifelinemesh.data.AppDatabase
+import com.example.lifelinemesh.data.MessageEntity
 
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
@@ -405,14 +409,11 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
             IconButton(
                 onClick = {
                     Toast.makeText(context, "Acquiring GPS lock...", Toast.LENGTH_SHORT).show()
-
                     try {
-                        // THIS forces the antenna on and demands a fresh, highly accurate coordinate
                         fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
                             .addOnSuccessListener { location ->
                                 if (location != null) {
                                     val alertText = "🚨 Emergency Location Shared"
-
                                     val newLocationMessage = ChatMessage(
                                         text = alertText,
                                         isFromMe = true,
@@ -421,9 +422,27 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                                         latitude = location.latitude,
                                         longitude = location.longitude
                                     )
-
                                     messages.add(newLocationMessage)
 
+                                    // 1. Save to Database (Store)
+                                    scope.launch(Dispatchers.IO) {
+                                        val dao = AppDatabase.getDatabase(context).messageDao()
+                                        dao.insertMessage(
+                                            MessageEntity(
+                                                id = newLocationMessage.id,
+                                                text = alertText,
+                                                isFromMe = true,
+                                                senderName = user.name,
+                                                senderPhone = user.phoneNumber,
+                                                latitude = location.latitude,
+                                                longitude = location.longitude,
+                                                timestamp = System.currentTimeMillis(),
+                                                priority = 3 // CRITICAL priority for GPS
+                                            )
+                                        )
+                                    }
+
+                                    // 2. Attempt to send immediately (Forward)
                                     nearbyManager.sendData(
                                         messageId = newLocationMessage.id,
                                         message = alertText,
@@ -442,8 +461,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                     } catch (e: SecurityException) {
                         Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
                     }
-                },
-                enabled = activeConnections > 0
+                }
             ) {
                 Text("📍", fontSize = 24.sp)
             }
@@ -462,16 +480,33 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                     focusManager.clearFocus()
                     if (currentText.isNotBlank()) {
                         val msgToSend = currentText
-
                         val newChatMessage = ChatMessage(
                             text = msgToSend,
                             isFromMe = true,
                             senderName = user.name,
                             senderPhone = user.phoneNumber
                         )
-
                         messages.add(newChatMessage)
 
+                        // 1. Save to Database (Store)
+                        scope.launch(Dispatchers.IO) {
+                            val dao = AppDatabase.getDatabase(context).messageDao()
+                            dao.insertMessage(
+                                MessageEntity(
+                                    id = newChatMessage.id,
+                                    text = msgToSend,
+                                    isFromMe = true,
+                                    senderName = user.name,
+                                    senderPhone = user.phoneNumber,
+                                    latitude = null,
+                                    longitude = null,
+                                    timestamp = System.currentTimeMillis(),
+                                    priority = 1 // NORMAL priority for text
+                                )
+                            )
+                        }
+
+                        // 2. Attempt to send immediately (Forward)
                         nearbyManager.sendData(
                             messageId = newChatMessage.id,
                             message = msgToSend,
@@ -480,11 +515,9 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                             lat = null,
                             lng = null
                         )
-
                         currentText = ""
                     }
-                },
-                enabled = activeConnections > 0
+                }
             ) {
                 Text("Send")
             }

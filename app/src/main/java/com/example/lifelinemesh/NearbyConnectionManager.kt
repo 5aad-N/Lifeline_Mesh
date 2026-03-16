@@ -7,6 +7,11 @@ import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.nearby.connection.ConnectionsStatusCodes
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import com.example.lifelinemesh.data.AppDatabase
+import com.example.lifelinemesh.data.MessageEntity
 
 class NearbyConnectionManager(
     private val context: Context,
@@ -125,6 +130,23 @@ class NearbyConnectionManager(
                     onSystemChatEvent("$peerName has joined the mesh")
                     onConnectionChanged(connectedEndpoints.size)
                     onStatusUpdate("Connected to ${connectedEndpoints.size} device(s)")
+
+                    // NEW: Trigger Store-and-Forward sync!
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val dao = AppDatabase.getDatabase(context).messageDao()
+                        val pendingMessages = dao.getMessagesForForwarding()
+
+                        for (msg in pendingMessages) {
+                            sendData(
+                                messageId = msg.id,
+                                message = msg.text,
+                                senderName = msg.senderName,
+                                senderPhone = msg.senderPhone,
+                                lat = msg.latitude,
+                                lng = msg.longitude
+                            )
+                        }
+                    }
                 }
             } else if (result.status.statusCode != 8012) {
                 onStatusUpdate("Connection Failed (${result.status.statusCode})")
@@ -146,13 +168,11 @@ class NearbyConnectionManager(
                 try {
                     val jsonString = String(bytes, StandardCharsets.UTF_8)
                     val jsonEnvelope = JSONObject(jsonString)
-
                     val messageId = jsonEnvelope.getString("messageId")
 
                     if (seenMessageIds.contains(messageId)) {
                         return
                     }
-
                     seenMessageIds.add(messageId)
 
                     val text = jsonEnvelope.getString("text")
@@ -162,10 +182,27 @@ class NearbyConnectionManager(
                     val lat = if (hasLocation) jsonEnvelope.getDouble("latitude") else null
                     val lng = if (hasLocation) jsonEnvelope.getDouble("longitude") else null
 
+                    // NEW: Save incoming message to local database so this device acts as a Data Mule
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val dao = AppDatabase.getDatabase(context).messageDao()
+                        dao.insertMessage(
+                            MessageEntity(
+                                id = messageId,
+                                text = text,
+                                isFromMe = false,
+                                senderName = senderName,
+                                senderPhone = senderPhone,
+                                latitude = lat,
+                                longitude = lng,
+                                timestamp = System.currentTimeMillis(),
+                                priority = if (hasLocation) 3 else 1 // Infer priority
+                            )
+                        )
+                    }
+
                     onMessageReceived(text, senderName, senderPhone, lat, lng)
 
                     val endpointsToForward = connectedEndpoints.filter { it != endpointId }
-
                     if (endpointsToForward.isNotEmpty()) {
                         Nearby.getConnectionsClient(context).sendPayload(endpointsToForward, payload)
                     }
