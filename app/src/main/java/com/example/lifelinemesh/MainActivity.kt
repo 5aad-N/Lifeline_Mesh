@@ -41,8 +41,10 @@ import androidx.core.content.ContextCompat
 import com.example.lifelinemesh.ui.theme.LifelineMeshTheme
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import java.util.UUID
 
 data class ChatMessage(
+    val id: String = UUID.randomUUID().toString(),
     val text: String,
     val isFromMe: Boolean,
     val senderName: String = "",
@@ -410,17 +412,26 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                             .addOnSuccessListener { location ->
                                 if (location != null) {
                                     val alertText = "🚨 Emergency Location Shared"
-                                    messages.add(
-                                        ChatMessage(
-                                            text = alertText,
-                                            isFromMe = true,
-                                            senderName = user.name,
-                                            senderPhone = user.phoneNumber,
-                                            latitude = location.latitude,
-                                            longitude = location.longitude
-                                        )
+
+                                    val newLocationMessage = ChatMessage(
+                                        text = alertText,
+                                        isFromMe = true,
+                                        senderName = user.name,
+                                        senderPhone = user.phoneNumber,
+                                        latitude = location.latitude,
+                                        longitude = location.longitude
                                     )
-                                    nearbyManager.sendData(alertText, user.name, user.phoneNumber, location.latitude, location.longitude)
+
+                                    messages.add(newLocationMessage)
+
+                                    nearbyManager.sendData(
+                                        messageId = newLocationMessage.id,
+                                        message = alertText,
+                                        senderName = user.name,
+                                        senderPhone = user.phoneNumber,
+                                        lat = location.latitude,
+                                        lng = location.longitude
+                                    )
                                 } else {
                                     Toast.makeText(context, "Ensure GPS is turned on and you are outdoors.", Toast.LENGTH_LONG).show()
                                 }
@@ -452,9 +463,23 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                     if (currentText.isNotBlank()) {
                         val msgToSend = currentText
 
-                        messages.add(ChatMessage(msgToSend, isFromMe = true, senderName = user.name, senderPhone = user.phoneNumber))
+                        val newChatMessage = ChatMessage(
+                            text = msgToSend,
+                            isFromMe = true,
+                            senderName = user.name,
+                            senderPhone = user.phoneNumber
+                        )
 
-                        nearbyManager.sendData(msgToSend, user.name, user.phoneNumber, null, null)
+                        messages.add(newChatMessage)
+
+                        nearbyManager.sendData(
+                            messageId = newChatMessage.id,
+                            message = msgToSend,
+                            senderName = user.name,
+                            senderPhone = user.phoneNumber,
+                            lat = null,
+                            lng = null
+                        )
 
                         currentText = ""
                     }

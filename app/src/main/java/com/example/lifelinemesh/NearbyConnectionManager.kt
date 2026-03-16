@@ -22,6 +22,7 @@ class NearbyConnectionManager(
     private val connectedEndpoints = mutableListOf<String>()
     private val endpointNames = mutableMapOf<String, String>()
     private val pendingConnections = mutableSetOf<String>()
+    private val seenMessageIds = mutableSetOf<String>()
 
     fun startAdvertising() {
         val advertisingOptions = AdvertisingOptions.Builder().setStrategy(STRATEGY).build()
@@ -39,14 +40,15 @@ class NearbyConnectionManager(
             .addOnFailureListener { e -> onStatusUpdate("Discovery Failed: ${e.message}") }
     }
 
-    // --- THE FIX: BUILDING THE JSON ENVELOPE ---
-    fun sendData(message: String, senderName: String, senderPhone: String, lat: Double? = null, lng: Double? = null) {
+    fun sendData(messageId: String, message: String, senderName: String, senderPhone: String, lat: Double? = null, lng: Double? = null) {
+        seenMessageIds.add(messageId)
+
         val jsonEnvelope = JSONObject()
+        jsonEnvelope.put("messageId", messageId) // <-- NEW: Stamp the envelope
         jsonEnvelope.put("text", message)
         jsonEnvelope.put("senderName", senderName)
         jsonEnvelope.put("senderPhone", senderPhone)
 
-        // NEW: If we have coordinates, add them to the envelope
         if (lat != null && lng != null) {
             jsonEnvelope.put("latitude", lat)
             jsonEnvelope.put("longitude", lng)
@@ -70,6 +72,7 @@ class NearbyConnectionManager(
         connectedEndpoints.clear()
         endpointNames.clear()
         pendingConnections.clear()
+        seenMessageIds.clear()
         onConnectionChanged(0)
         onStatusUpdate("Radio Stopped")
     }
@@ -141,24 +144,33 @@ class NearbyConnectionManager(
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             payload.asBytes()?.let { bytes ->
                 try {
-                    // --- THE FIX: OPENING THE JSON ENVELOPE ---
                     val jsonString = String(bytes, StandardCharsets.UTF_8)
                     val jsonEnvelope = JSONObject(jsonString)
+
+                    val messageId = jsonEnvelope.getString("messageId")
+
+                    if (seenMessageIds.contains(messageId)) {
+                        return
+                    }
+
+                    seenMessageIds.add(messageId)
 
                     val text = jsonEnvelope.getString("text")
                     val senderName = jsonEnvelope.getString("senderName")
                     val senderPhone = jsonEnvelope.getString("senderPhone")
-
-                    // NEW: Safely extract coordinates if they exist
                     val hasLocation = jsonEnvelope.optBoolean("hasLocation", false)
                     val lat = if (hasLocation) jsonEnvelope.getDouble("latitude") else null
                     val lng = if (hasLocation) jsonEnvelope.getDouble("longitude") else null
 
-                    // Pass all data up to the UI!
                     onMessageReceived(text, senderName, senderPhone, lat, lng)
 
+                    val endpointsToForward = connectedEndpoints.filter { it != endpointId }
+
+                    if (endpointsToForward.isNotEmpty()) {
+                        Nearby.getConnectionsClient(context).sendPayload(endpointsToForward, payload)
+                    }
+
                 } catch (e: Exception) {
-                    // Fallback just in case an old plain-text message sneaks through
                     val rawText = String(bytes, StandardCharsets.UTF_8)
                     onMessageReceived(rawText, "Unknown", "Unknown", null, null)
                 }
