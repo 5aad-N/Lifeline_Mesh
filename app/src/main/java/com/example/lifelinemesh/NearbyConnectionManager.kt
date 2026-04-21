@@ -47,6 +47,11 @@ class NearbyConnectionManager(
             .addOnFailureListener { e -> onStatusUpdate("Discovery Failed: ${e.message}") }
     }
 
+    fun stopDiscovery() {
+        // This stops the high-drain scanning, but leaves startAdvertising() running!
+        Nearby.getConnectionsClient(context).stopDiscovery()
+    }
+
     fun sendData(messageId: String, message: String, senderName: String, senderPhone: String, lat: Double? = null, lng: Double? = null) {
         seenMessageIds.add(messageId)
 

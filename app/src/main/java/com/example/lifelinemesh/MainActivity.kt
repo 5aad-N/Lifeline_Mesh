@@ -50,6 +50,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import kotlinx.coroutines.withContext
 import android.annotation.SuppressLint
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.util.Log
 
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
@@ -413,10 +416,51 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
         )
     }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(context) {
+        // 1. Initialise the radio normally when the app opens
         nearbyManager.startAdvertising()
         nearbyManager.startDiscovery()
-        onDispose { nearbyManager.stop() }
+        var isSurvivalModeActive = false
+
+        // 2. Create the Battery Listener
+        val batteryReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == Intent.ACTION_BATTERY_CHANGED) {
+                    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                    val batteryPct = level * 100 / scale.toFloat()
+
+                    // BEACON MODE LOGIC: Below 20%, stop scanning but KEEP advertising
+                    if (batteryPct <= 20.0f && !isSurvivalModeActive) {
+                        isSurvivalModeActive = true
+                        systemStatus = "🚨 Beacon Mode: Scanning Suspended (Low Battery)"
+                        Log.d("SurvivalMode", "Beacon Mode Activated: Stopping Discovery, keeping Advertising active")
+
+                        // Stop looking for others (saves battery) but stay visible to rescuers!
+                        nearbyManager.stopDiscovery()
+                    }
+                    // RECOVERY LOGIC: Above 20%, turn scanning back on
+                    else if (batteryPct > 20.0f && isSurvivalModeActive) {
+                        isSurvivalModeActive = false
+                        systemStatus = "Radio Active"
+                        Log.d("SurvivalMode", "Battery recovered: Resuming BLE Discovery")
+
+                        // Resume full DTN operations
+                        nearbyManager.startDiscovery()
+                    }
+                }
+            }
+        }
+
+        // 3. Register the listener with the Android OS
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        context.registerReceiver(batteryReceiver, filter)
+
+        // 4. Clean up when the UI is closed
+        onDispose {
+            context.unregisterReceiver(batteryReceiver)
+            nearbyManager.stop()
+        }
     }
 
     Column(modifier = modifier.fillMaxSize()) {
