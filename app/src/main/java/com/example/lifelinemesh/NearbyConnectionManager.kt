@@ -110,7 +110,6 @@ class NearbyConnectionManager(
                 val bytes = jsonEnvelope.toString().toByteArray(StandardCharsets.UTF_8)
                 val payload = Payload.fromBytes(bytes)
 
-                // CRITICAL FIX: Send ONLY to the newly connected endpoint, not everyone.
                 Nearby.getConnectionsClient(context).sendPayload(newEndpointId, payload)
             }
         }
@@ -217,7 +216,7 @@ class NearbyConnectionManager(
                     val lat = if (hasLocation) jsonEnvelope.getDouble("latitude") else null
                     val lng = if (hasLocation) jsonEnvelope.getDouble("longitude") else null
 
-                    // NEW: Save incoming message to local database so this device acts as a Data Mule
+                    // Save incoming message to local database so this device acts as a Data Mule
                     CoroutineScope(Dispatchers.IO).launch {
                         val dao = AppDatabase.getDatabase(context).messageDao()
                         dao.insertMessage(

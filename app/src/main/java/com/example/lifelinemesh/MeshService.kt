@@ -24,7 +24,6 @@ class MeshService : Service() {
             .setOngoing(true)
             .build()
 
-        // Start the service in the foreground with the required specific type
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 1,

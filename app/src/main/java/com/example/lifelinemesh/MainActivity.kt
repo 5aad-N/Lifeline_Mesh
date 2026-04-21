@@ -548,7 +548,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                                                     latitude = location.latitude,
                                                     longitude = location.longitude,
                                                     timestamp = System.currentTimeMillis(),
-                                                    priority = 3 // CRITICAL priority for GPS
+                                                    priority = 3 // priority for GPS
                                                 )
                                             )
                                         }

@@ -7,7 +7,7 @@ import androidx.room.Query
 import kotlin.jvm.JvmSuppressWildcards
 
 @Dao
-@JvmSuppressWildcards // <-- Add this annotation to suppress generic strictness
+@JvmSuppressWildcards // suppress generic strictness
 interface MessageDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
