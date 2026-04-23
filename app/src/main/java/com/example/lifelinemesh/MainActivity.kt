@@ -319,6 +319,9 @@ fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Mod
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val messages = remember { mutableStateListOf<ChatMessage>() }
+    var showEmergencyDialog by remember { mutableStateOf(false) }
+    var emergencyText by remember { mutableStateOf("") }
+    var includeLocation by remember { mutableStateOf(true) }
 
     var currentText by remember { mutableStateOf("") }
     var systemStatus by remember { mutableStateOf("Initializing Radio...") }
@@ -403,6 +406,125 @@ fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Mod
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
+    }
+
+    if (showEmergencyDialog) {
+        AlertDialog(
+            onDismissRequest = { showEmergencyDialog = false },
+            title = { Text("Priority 3 Distress Signal", color = Color.Red, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text(
+                        "This message will be encrypted and routed offline to emergency services.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = emergencyText,
+                        onValueChange = { emergencyText = it },
+                        label = { Text("Describe situation (Optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = includeLocation,
+                            onCheckedChange = { includeLocation = it }
+                        )
+                        Text("Include precise GPS Location")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
+                    onClick = {
+                        if (emergencyText.isBlank() && !includeLocation) {
+                            Toast.makeText(context, "Please provide a message or include location.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        showEmergencyDialog = false
+
+                        // A helper function to build and send the encrypted payload
+                        fun dispatchEmergency(lat: Double?, lng: Double?) {
+                            val alertContent = if (emergencyText.isNotBlank()) emergencyText else "🚨 Emergency Signal Shared"
+
+                            val cipherData = CryptoHelper.encryptPriority3Payload(
+                                text = alertContent,
+                                name = user.name,
+                                phone = user.phoneNumber,
+                                lat = lat,
+                                lng = lng
+                            )
+                            val securePayload = "[P3_ENCRYPTED]$cipherData"
+
+                            val newEmergencyMessage = ChatMessage(
+                                text = securePayload, isFromMe = true, senderName = user.name, senderPhone = user.phoneNumber, latitude = null, longitude = null
+                            )
+                            messages.add(newEmergencyMessage)
+
+                            scope.launch(Dispatchers.IO) {
+                                val dao = AppDatabase.getDatabase(context).messageDao()
+                                dao.insertMessage(
+                                    MessageEntity(
+                                        id = newEmergencyMessage.id, text = securePayload, isFromMe = true,
+                                        senderName = user.name, senderPhone = user.phoneNumber, latitude = null, longitude = null,
+                                        timestamp = System.currentTimeMillis(), priority = 3
+                                    )
+                                )
+                                // Try to upload instantly if Wi-Fi is already connected
+                                CloudGateway.attemptOffload(context)
+                            }
+
+                            val sendIntent = Intent(context, MeshService::class.java).apply {
+                                action = "SEND_PAYLOAD"
+                                putExtra("id", newEmergencyMessage.id)
+                                putExtra("text", securePayload)
+                                putExtra("name", "Encrypted User")
+                                putExtra("phone", "Hidden")
+                                putExtra("isEmergency", false) // Already encrypted!
+                            }
+                            context.startService(sendIntent)
+
+                            // Reset the text box for next time
+                            emergencyText = ""
+                        }
+
+                        // Determine if we need to fetch GPS or send instantly
+                        if (includeLocation) {
+                            Toast.makeText(context, "Acquiring GPS lock...", Toast.LENGTH_SHORT).show()
+                            try {
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                                    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                                        .addOnSuccessListener { location ->
+                                            if (location != null) {
+                                                dispatchEmergency(location.latitude, location.longitude)
+                                            } else {
+                                                Toast.makeText(context, "GPS failed. Sending text only.", Toast.LENGTH_SHORT).show()
+                                                dispatchEmergency(null, null)
+                                            }
+                                        }
+                                }
+                            } catch (e: SecurityException) {
+                                dispatchEmergency(null, null)
+                            }
+                        } else {
+                            dispatchEmergency(null, null) // Send text only!
+                        }
+                    }
+                ) {
+                    Text("Send SOS")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEmergencyDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            }
+        )
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -493,79 +615,9 @@ fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Mod
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
-                onClick = {
-                    Toast.makeText(context, "Acquiring GPS lock...", Toast.LENGTH_SHORT).show()
-                    try {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-                                .addOnSuccessListener { location ->
-                                    if (location != null) {
-                                        val alertText = "🚨 Emergency Location Shared"
-
-                                        // 1. ENCRYPT THE DATA IMMEDIATELY (Before it touches the UI or DB!)
-                                        val cipherData = CryptoHelper.encryptPriority3Payload(
-                                            text = alertText,
-                                            name = user.name,
-                                            phone = user.phoneNumber,
-                                            lat = location.latitude,
-                                            lng = location.longitude
-                                        )
-                                        val securePayload = "[P3_ENCRYPTED]$cipherData"
-
-                                        // 2. Create the ChatMessage for the UI (Coordinates are NULL so they stay off the screen)
-                                        val newLocationMessage = ChatMessage(
-                                            text = securePayload,
-                                            isFromMe = true,
-                                            senderName = user.name,
-                                            senderPhone = user.phoneNumber,
-                                            latitude = null, // DO NOT STORE IN MEMORY
-                                            longitude = null // DO NOT STORE IN MEMORY
-                                        )
-                                        messages.add(newLocationMessage)
-
-                                        // 3. Save the SECURE version to the Local SQLite Database
-                                        scope.launch(Dispatchers.IO) {
-                                            val dao = AppDatabase.getDatabase(context).messageDao()
-                                            dao.insertMessage(
-                                                MessageEntity(
-                                                    id = newLocationMessage.id,
-                                                    text = securePayload,
-                                                    isFromMe = true,
-                                                    senderName = user.name,
-                                                    senderPhone = user.phoneNumber,
-                                                    latitude = null,
-                                                    longitude = null,
-                                                    timestamp = System.currentTimeMillis(),
-                                                    priority = 3
-                                                )
-                                            )
-
-                                            // NEW: Instantly attempt to upload it in case the sender ALREADY has Wi-Fi!
-                                            CloudGateway.attemptOffload(context)
-                                        }
-
-                                        // 4. Send to MeshService (Pass false for isEmergency because we already encrypted it here!)
-                                        val sendIntent = Intent(context, MeshService::class.java).apply {
-                                            action = "SEND_PAYLOAD"
-                                            putExtra("id", newLocationMessage.id)
-                                            putExtra("text", securePayload)
-                                            putExtra("name", "Encrypted User") // Scrub metadata
-                                            putExtra("phone", "Hidden") // Scrub metadata
-                                            putExtra("isEmergency", false) // Prevent double-encryption
-                                        }
-                                        context.startService(sendIntent)
-
-                                    } else {
-                                        Toast.makeText(context, "Ensure GPS is turned on and you are outdoors.", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                        }
-                    } catch (e: SecurityException) {
-                        Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
-                    }
-                }
+                onClick = { showEmergencyDialog = true }
             ) {
-                Text("📍", fontSize = 24.sp)
+                Text("🚨", fontSize = 24.sp)
             }
 
             TextField(
@@ -643,7 +695,7 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true, isRescueWork
     if (isEncrypted) {
         if (message.isFromMe) {
             // Sender sees their own message normally, just with a lock icon.
-            displayText = "🚨 Emergency Location Shared"
+            displayText = "🔒 Encrypted SOS Signal Sent"
             showLockIcon = true
         } else if (isRescueWorker) {
             // Rescue Worker intercepts and decrypts!

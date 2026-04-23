@@ -230,24 +230,6 @@ class NearbyConnectionManager(
                     val lat = if (hasLocation) jsonEnvelope.getDouble("latitude") else null
                     val lng = if (hasLocation) jsonEnvelope.getDouble("longitude") else null
 
-                    // Save incoming message to local database so this device acts as a Data Mule
-                    CoroutineScope(Dispatchers.IO).launch {
-                        val dao = AppDatabase.getDatabase(context).messageDao()
-                        dao.insertMessage(
-                            MessageEntity(
-                                id = messageId, // Uses the exact ID to prevent duplicates!
-                                text = text,
-                                isFromMe = false,
-                                senderName = senderName,
-                                senderPhone = senderPhone,
-                                latitude = lat,
-                                longitude = lng,
-                                timestamp = System.currentTimeMillis(),
-                                priority = if (hasLocation) 3 else 1 // Infer priority
-                            )
-                        )
-                    }
-
                     onMessageReceived(messageId, text, senderName, senderPhone, lat, lng)
 
                     val endpointsToForward = connectedEndpoints.filter { it != endpointId }

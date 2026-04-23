@@ -20,8 +20,6 @@ object CloudGateway {
     private val uploadedMessageIds = mutableSetOf<String>()
 
     fun attemptOffload(context: Context) {
-        if (WEBHOOK_URL == "YOUR_WEBHOOK_URL_HERE") return
-
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 // 1. Check the local SQLite Database
@@ -47,17 +45,27 @@ object CloudGateway {
                         val decrypted = CryptoHelper.decryptPriority3Payload(cipherText)
 
                         if (decrypted != null) {
+                            // Extract all the fields, including the new text body!
+                            val messageBody = decrypted.optString("text", "No message provided")
                             val lat = decrypted.optDouble("lat", 0.0)
                             val lng = decrypted.optDouble("lng", 0.0)
                             val name = decrypted.optString("name", "Unknown")
                             val phone = decrypted.optString("phone", "Unknown")
 
+                            // Make the Google Maps link functional if coordinates exist
+                            val mapsLink = if (lat != 0.0 && lng != 0.0) {
+                                "[View on Google Maps](https://www.google.com/maps/search/?api=1&query=$lat,$lng)"
+                            } else {
+                                "No GPS coordinates provided."
+                            }
+
                             alertText = """
                                 🚨 **LIFELINE MESH EMERGENCY UPLOAD** 🚨
                                 **Victim:** $name
                                 **Phone:** $phone
+                                **Message:** $messageBody
                                 **Location:** $lat, $lng
-                                [Google Maps Link](https://www.google.com/maps/search/?api=1&query=$lat,$lng)
+                                $mapsLink
                             """.trimIndent()
                         }
                     }
