@@ -3,6 +3,7 @@ package com.example.lifelinemesh
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.os.Build
@@ -50,9 +51,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import kotlinx.coroutines.withContext
 import android.annotation.SuppressLint
-import android.content.IntentFilter
-import android.os.BatteryManager
-import android.util.Log
 
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
@@ -111,7 +109,6 @@ fun AppContent(modifier: Modifier = Modifier) {
     if (currentUser == null) {
         LoginScreen(
             onLoginSuccess = { name, phone ->
-                // Save to disk
                 prefs.edit().putString("user_name", name).putString("user_phone", phone).apply()
                 currentUser = UserProfile(name, phone)
             },
@@ -224,6 +221,7 @@ fun LoginScreen(
     onLoginSuccess: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // ... (Keep this exactly the same as your previous code) ...
     var nameInput by remember { mutableStateOf("") }
     var phoneInput by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
@@ -243,9 +241,7 @@ fun LoginScreen(
         )
 
         Spacer(modifier = Modifier.height(8.dp))
-
         Text("Offline Emergency Network")
-
         Spacer(modifier = Modifier.height(32.dp))
 
         OutlinedTextField(
@@ -294,9 +290,18 @@ fun LoginScreen(
 fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
     val messages = remember { mutableStateListOf<ChatMessage>() }
 
+    var currentText by remember { mutableStateOf("") }
+    var systemStatus by remember { mutableStateOf("Initializing Radio...") }
+    var activeConnections by remember { mutableIntStateOf(0) }
+
+    val focusManager = LocalFocusManager.current
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val listState = rememberLazyListState()
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+
+    // Start the Background Service the moment the UI loads
     LaunchedEffect(user) {
         val serviceIntent = Intent(context, MeshService::class.java).apply {
             putExtra("USER_NAME", user.name)
@@ -308,57 +313,54 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
         }
     }
 
+    // Load Database History
     LaunchedEffect(Unit) {
         val dao = AppDatabase.getDatabase(context).messageDao()
         val savedMessages = dao.getAllMessages()
-
         for (msg in savedMessages) {
             messages.add(
                 ChatMessage(
-                    id = msg.id,
-                    text = msg.text,
-                    isFromMe = msg.isFromMe,
-                    senderName = msg.senderName,
-                    senderPhone = msg.senderPhone,
-                    latitude = msg.latitude,
-                    longitude = msg.longitude,
-                    timestamp = msg.timestamp
+                    id = msg.id, text = msg.text, isFromMe = msg.isFromMe,
+                    senderName = msg.senderName, senderPhone = msg.senderPhone,
+                    latitude = msg.latitude, longitude = msg.longitude, timestamp = msg.timestamp
                 )
             )
         }
     }
 
-    // Listen for background messages from the MeshService
+    // The UI is just a "Listener". It listens for Intents broadcasted by the MeshService.
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     DisposableEffect(context) {
         val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                val text = intent?.getStringExtra("text") ?: ""
-                val name = intent?.getStringExtra("name") ?: "Unknown"
-                val phone = intent?.getStringExtra("phone") ?: ""
-                val lat = if (intent?.hasExtra("lat") == true) intent.getDoubleExtra("lat", 0.0) else null
-                val lng = if (intent?.hasExtra("lng") == true) intent.getDoubleExtra("lng", 0.0) else null
+                when (intent?.action) {
+                    "MESH_MESSAGE_RECEIVED" -> {
+                        val text = intent.getStringExtra("text") ?: ""
+                        val name = intent.getStringExtra("name") ?: "Unknown"
+                        val phone = intent.getStringExtra("phone") ?: ""
+                        val lat = if (intent.hasExtra("lat")) intent.getDoubleExtra("lat", 0.0) else null
+                        val lng = if (intent.hasExtra("lng")) intent.getDoubleExtra("lng", 0.0) else null
 
-                messages.add(
-                    ChatMessage(
-                        text = text,
-                        isFromMe = false,
-                        senderName = name,
-                        senderPhone = phone,
-                        latitude = lat,
-                        longitude = lng
-                    )
-                )
+                        messages.add(
+                            ChatMessage(text = text, isFromMe = false, senderName = name, senderPhone = phone, latitude = lat, longitude = lng)
+                        )
+                    }
+                    "MESH_STATUS_UPDATE" -> {
+                        if (intent.hasExtra("status")) systemStatus = intent.getStringExtra("status")!!
+                        if (intent.hasExtra("connections")) activeConnections = intent.getIntExtra("connections", 0)
+                    }
+                }
             }
         }
 
-        val filter = android.content.IntentFilter("MESH_MESSAGE_RECEIVED")
+        val filter = IntentFilter().apply {
+            addAction("MESH_MESSAGE_RECEIVED")
+            addAction("MESH_STATUS_UPDATE")
+        }
 
-        // FIX: Explicitly check for API 33+ (Tiramisu) and provide the NOT_EXPORTED flag
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
-            // For older versions, the flag isn't required/supported
             context.registerReceiver(receiver, filter)
         }
 
@@ -367,99 +369,10 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
         }
     }
 
-    var currentText by remember { mutableStateOf("") }
-    var systemStatus by remember { mutableStateOf("Initializing Radio...") }
-    var activeConnections by remember { mutableIntStateOf(0) }
-
-    val focusManager = LocalFocusManager.current
-
-    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
-
-    val listState = rememberLazyListState()
-
-    // 2. The tracker that measures how tall the keyboard is right now
-    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
-
-    // 3. The Auto-Scroll Trigger!
-    // This fires instantly whenever the message list grows OR the keyboard pops up
+    // Auto-Scroll Trigger
     LaunchedEffect(messages.size, imeBottom) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
-        }
-    }
-
-    val nearbyManager = remember {
-        NearbyConnectionManager(
-            context = context,
-            myName = user.name,
-            onMessageReceived = { incomingText, senderName, senderPhone, lat, lng ->
-                messages.add(
-                    ChatMessage(
-                        text = incomingText,
-                        isFromMe = false,
-                        senderName = senderName,
-                        senderPhone = senderPhone,
-                        latitude = lat,
-                        longitude = lng
-                    )
-                )
-            },
-            onSystemChatEvent = { eventText ->
-                messages.add(ChatMessage(text = eventText, isFromMe = false, isSystemEvent = true))
-            },
-            onStatusUpdate = { status ->
-                systemStatus = status
-            },
-            onConnectionChanged = { count ->
-                activeConnections = count
-            }
-        )
-    }
-
-    DisposableEffect(context) {
-        // 1. Initialise the radio normally when the app opens
-        nearbyManager.startAdvertising()
-        nearbyManager.startDiscovery()
-        var isSurvivalModeActive = false
-
-        // 2. Create the Battery Listener
-        val batteryReceiver = object : android.content.BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == Intent.ACTION_BATTERY_CHANGED) {
-                    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-                    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                    val batteryPct = level * 100 / scale.toFloat()
-
-                    // BEACON MODE LOGIC: Below 20%, stop scanning but KEEP advertising
-                    if (batteryPct <= 20.0f && !isSurvivalModeActive) {
-                        isSurvivalModeActive = true
-                        systemStatus = "🚨 Beacon Mode: Scanning Suspended (Low Battery)"
-                        Log.d("SurvivalMode", "Beacon Mode Activated: Stopping Discovery, keeping Advertising active")
-
-                        // Stop looking for others (saves battery) but stay visible to rescuers!
-                        nearbyManager.stopDiscovery()
-                    }
-                    // RECOVERY LOGIC: Above 20%, turn scanning back on
-                    else if (batteryPct > 20.0f && isSurvivalModeActive) {
-                        isSurvivalModeActive = false
-                        systemStatus = "Radio Active"
-                        Log.d("SurvivalMode", "Battery recovered: Resuming BLE Discovery")
-
-                        // Resume full DTN operations
-                        nearbyManager.startDiscovery()
-                    }
-                }
-            }
-        }
-
-        // 3. Register the listener with the Android OS
-        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        context.registerReceiver(batteryReceiver, filter)
-
-        // 4. Clean up when the UI is closed
-        onDispose {
-            context.unregisterReceiver(batteryReceiver)
-            nearbyManager.stop()
         }
     }
 
@@ -494,14 +407,10 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                             fontWeight = FontWeight.Bold
                         )
 
-                        // Clear Database Button
                         IconButton(
                             onClick = {
                                 scope.launch(Dispatchers.IO) {
-                                    // 1. Wipe the physical SQLite database
                                     AppDatabase.getDatabase(context).messageDao().clearAllMessages()
-
-                                    // 2. Wipe the UI state on the Main thread
                                     withContext(Dispatchers.Main) {
                                         messages.clear()
                                         Toast.makeText(context, "Mesh History Cleared", Toast.LENGTH_SHORT).show()
@@ -509,22 +418,12 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                                 }
                             }
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Clear Mesh",
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                            Icon(Icons.Default.Delete, "Clear Mesh", tint = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                     }
                 }
-
                 Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = systemStatus,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                )
+                Text(systemStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
             }
         }
 
@@ -540,16 +439,11 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                 }
             }
 
-            // itemsIndexed lets us look at the previous message!
             itemsIndexed(messages) { index, message ->
                 val isFirstMessage = index == 0
                 val previousMessage = if (!isFirstMessage) messages[index - 1] else null
-
-                // Decide if we should show the header based on the previous message
-                val showHeader = isFirstMessage ||
-                        previousMessage?.isSystemEvent == true ||
-                        previousMessage?.senderName != message.senderName ||
-                        previousMessage.isFromMe != message.isFromMe
+                val showHeader = isFirstMessage || previousMessage?.isSystemEvent == true ||
+                        previousMessage?.senderName != message.senderName || previousMessage.isFromMe != message.isFromMe
 
                 MessageBubble(message = message, showHeader = showHeader)
             }
@@ -563,58 +457,46 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                 onClick = {
                     Toast.makeText(context, "Acquiring GPS lock...", Toast.LENGTH_SHORT).show()
                     try {
-                        // FIX: Add explicit permission check to satisfy Android Studio Lint
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                             fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
                                 .addOnSuccessListener { location ->
                                     if (location != null) {
                                         val alertText = "🚨 Emergency Location Shared"
                                         val newLocationMessage = ChatMessage(
-                                            text = alertText,
-                                            isFromMe = true,
-                                            senderName = user.name,
-                                            senderPhone = user.phoneNumber,
-                                            latitude = location.latitude,
-                                            longitude = location.longitude
+                                            text = alertText, isFromMe = true, senderName = user.name,
+                                            senderPhone = user.phoneNumber, latitude = location.latitude, longitude = location.longitude
                                         )
                                         messages.add(newLocationMessage)
 
-                                        // 1. Save to Database (Store)
+                                        // 1. Save to Database
                                         scope.launch(Dispatchers.IO) {
                                             val dao = AppDatabase.getDatabase(context).messageDao()
                                             dao.insertMessage(
                                                 MessageEntity(
-                                                    id = newLocationMessage.id,
-                                                    text = alertText,
-                                                    isFromMe = true,
-                                                    senderName = user.name,
-                                                    senderPhone = user.phoneNumber,
-                                                    latitude = location.latitude,
-                                                    longitude = location.longitude,
-                                                    timestamp = System.currentTimeMillis(),
-                                                    priority = 3 // priority for GPS
+                                                    id = newLocationMessage.id, text = alertText, isFromMe = true,
+                                                    senderName = user.name, senderPhone = user.phoneNumber,
+                                                    latitude = location.latitude, longitude = location.longitude,
+                                                    timestamp = System.currentTimeMillis(), priority = 3
                                                 )
                                             )
                                         }
 
-                                        // 2. Attempt to send immediately (Forward)
-                                        nearbyManager.sendData(
-                                            messageId = newLocationMessage.id,
-                                            message = alertText,
-                                            senderName = user.name,
-                                            senderPhone = user.phoneNumber,
-                                            lat = location.latitude,
-                                            lng = location.longitude
-                                        )
+                                        // 2. Tell the MeshService to forward it
+                                        val sendIntent = Intent(context, MeshService::class.java).apply {
+                                            action = "SEND_PAYLOAD"
+                                            putExtra("id", newLocationMessage.id)
+                                            putExtra("text", alertText)
+                                            putExtra("name", user.name)
+                                            putExtra("phone", user.phoneNumber)
+                                            putExtra("lat", location.latitude)
+                                            putExtra("lng", location.longitude)
+                                        }
+                                        context.startService(sendIntent)
+
                                     } else {
                                         Toast.makeText(context, "Ensure GPS is turned on and you are outdoors.", Toast.LENGTH_LONG).show()
                                     }
                                 }
-                                .addOnFailureListener {
-                                    Toast.makeText(context, "Failed to get location.", Toast.LENGTH_SHORT).show()
-                                }
-                        } else {
-                            Toast.makeText(context, "Location permission missing.", Toast.LENGTH_SHORT).show()
                         }
                     } catch (e: SecurityException) {
                         Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
@@ -638,41 +520,32 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                     focusManager.clearFocus()
                     if (currentText.isNotBlank()) {
                         val msgToSend = currentText
-                        val newChatMessage = ChatMessage(
-                            text = msgToSend,
-                            isFromMe = true,
-                            senderName = user.name,
-                            senderPhone = user.phoneNumber
-                        )
+                        val newChatMessage = ChatMessage(text = msgToSend, isFromMe = true, senderName = user.name, senderPhone = user.phoneNumber)
                         messages.add(newChatMessage)
 
-                        // 1. Save to Database (Store)
+                        // 1. Save to Database
                         scope.launch(Dispatchers.IO) {
                             val dao = AppDatabase.getDatabase(context).messageDao()
                             dao.insertMessage(
                                 MessageEntity(
-                                    id = newChatMessage.id,
-                                    text = msgToSend,
-                                    isFromMe = true,
-                                    senderName = user.name,
-                                    senderPhone = user.phoneNumber,
-                                    latitude = null,
-                                    longitude = null,
-                                    timestamp = System.currentTimeMillis(),
-                                    priority = 1 // NORMAL priority for text
+                                    id = newChatMessage.id, text = msgToSend, isFromMe = true,
+                                    senderName = user.name, senderPhone = user.phoneNumber,
+                                    latitude = null, longitude = null,
+                                    timestamp = System.currentTimeMillis(), priority = 1
                                 )
                             )
                         }
 
-                        // 2. Attempt to send immediately (Forward)
-                        nearbyManager.sendData(
-                            messageId = newChatMessage.id,
-                            message = msgToSend,
-                            senderName = user.name,
-                            senderPhone = user.phoneNumber,
-                            lat = null,
-                            lng = null
-                        )
+                        // 2. Tell the MeshService to forward it
+                        val sendIntent = Intent(context, MeshService::class.java).apply {
+                            action = "SEND_PAYLOAD"
+                            putExtra("id", newChatMessage.id)
+                            putExtra("text", msgToSend)
+                            putExtra("name", user.name)
+                            putExtra("phone", user.phoneNumber)
+                        }
+                        context.startService(sendIntent)
+
                         currentText = ""
                     }
                 }
@@ -703,14 +576,12 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
         ) {
             Surface(
                 color = bubbleColor,
-                // Dynamic corners for that WhatsApp "tail" effect
                 shape = RoundedCornerShape(
                     topStart = 12.dp,
                     topEnd = 12.dp,
                     bottomStart = if (message.isFromMe || !showHeader) 12.dp else 2.dp,
                     bottomEnd = if (!message.isFromMe || !showHeader) 12.dp else 2.dp
                 ),
-                // Tighter vertical padding if it's a grouped message
                 modifier = Modifier.padding(
                     start = 8.dp,
                     top = if (showHeader) 8.dp else 2.dp,
@@ -719,15 +590,12 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
                 )
             ) {
                 Column(modifier = Modifier.padding(8.dp)) {
-
-                    // --- THE WHATSAPP HEADER ---
-                    // Only show on incoming messages when showHeader is true
                     if (showHeader && !message.isFromMe && message.senderName.isNotEmpty()) {
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text(
                                 text = message.senderName,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary, // Pop of color for the name
+                                color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -740,13 +608,8 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
                         Spacer(modifier = Modifier.height(2.dp))
                     }
 
-                    // --- THE MESSAGE TEXT ---
-                    Text(
-                        text = message.text,
-                        color = textColor
-                    )
+                    Text(text = message.text, color = textColor)
 
-                    // Draw the location data if it exists
                     if (message.latitude != null && message.longitude != null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Surface(
