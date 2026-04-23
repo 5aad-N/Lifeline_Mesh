@@ -529,16 +529,19 @@ fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Mod
                                             dao.insertMessage(
                                                 MessageEntity(
                                                     id = newLocationMessage.id,
-                                                    text = securePayload, // This is now the unreadable ciphertext!
+                                                    text = securePayload,
                                                     isFromMe = true,
                                                     senderName = user.name,
                                                     senderPhone = user.phoneNumber,
-                                                    latitude = null, // SAFE!
-                                                    longitude = null, // SAFE!
+                                                    latitude = null,
+                                                    longitude = null,
                                                     timestamp = System.currentTimeMillis(),
                                                     priority = 3
                                                 )
                                             )
+
+                                            // NEW: Instantly attempt to upload it in case the sender ALREADY has Wi-Fi!
+                                            CloudGateway.attemptOffload(context)
                                         }
 
                                         // 4. Send to MeshService (Pass false for isEmergency because we already encrypted it here!)

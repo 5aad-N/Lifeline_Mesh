@@ -8,6 +8,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
@@ -17,7 +21,8 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 class MeshService : Service() {
-
+    private lateinit var connectivityManager: ConnectivityManager
+    private lateinit var networkCallback: ConnectivityManager.NetworkCallback
     private lateinit var nearbyManager: NearbyConnectionManager
     private var isSurvivalModeActive = false
     private var userName = "Unknown"
@@ -58,6 +63,23 @@ class MeshService : Service() {
         // Register Battery Listener
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         registerReceiver(batteryReceiver, filter)
+
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                super.onAvailable(network)
+                Log.d("CloudGateway", "Internet Connected! Attempting database offload...")
+                // The moment Wi-Fi or Cellular is found, blast the distress signals!
+                CloudGateway.attemptOffload(applicationContext)
+            }
+        }
+
+        val networkRequest = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        connectivityManager.registerNetworkCallback(networkRequest, networkCallback)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -81,7 +103,7 @@ class MeshService : Service() {
 
                             dao.insertMessage(
                                 com.example.lifelinemesh.data.MessageEntity(
-                                    id = incomingId, // FIX: Use the REAL ID!
+                                    id = incomingId,
                                     text = incomingText,
                                     isFromMe = false,
                                     senderName = incomingName,
@@ -92,6 +114,11 @@ class MeshService : Service() {
                                     priority = priorityLevel
                                 )
                             )
+
+                            // NEW: If this is an emergency and the Mule ALREADY has internet, upload it!
+                            if (priorityLevel == 3) {
+                                CloudGateway.attemptOffload(applicationContext)
+                            }
                         }
 
                         // 3. Pass it to the UI
@@ -170,6 +197,11 @@ class MeshService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(batteryReceiver)
+
+        if (::connectivityManager.isInitialized) {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+        }
+
         if (::nearbyManager.isInitialized) {
             nearbyManager.stop()
         }
