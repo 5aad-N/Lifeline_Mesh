@@ -345,6 +345,7 @@ fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Mod
     LaunchedEffect(Unit) {
         val dao = AppDatabase.getDatabase(context).messageDao()
         val savedMessages = dao.getAllMessages()
+        messages.clear()
         for (msg in savedMessages) {
             messages.add(
                 ChatMessage(

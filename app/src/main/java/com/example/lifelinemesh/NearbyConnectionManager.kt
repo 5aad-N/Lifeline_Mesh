@@ -14,11 +14,12 @@ import kotlinx.coroutines.launch
 import com.example.lifelinemesh.data.AppDatabase
 import com.example.lifelinemesh.data.MessageEntity
 import kotlinx.coroutines.delay
+import java.util.UUID
 
 class NearbyConnectionManager(
     private val context: Context,
     private val myName: String,
-    private val onMessageReceived: (String, String, String, Double?, Double?) -> Unit,
+    private val onMessageReceived: (messageId: String, text: String, name: String, phone: String, lat: Double?, lng: Double?) -> Unit,
     private val onSystemChatEvent: (String) -> Unit,
     private val onStatusUpdate: (String) -> Unit,
     private val onConnectionChanged: (Int) -> Unit
@@ -226,7 +227,7 @@ class NearbyConnectionManager(
                         val dao = AppDatabase.getDatabase(context).messageDao()
                         dao.insertMessage(
                             MessageEntity(
-                                id = messageId,
+                                id = messageId, // Uses the exact ID to prevent duplicates!
                                 text = text,
                                 isFromMe = false,
                                 senderName = senderName,
@@ -239,7 +240,7 @@ class NearbyConnectionManager(
                         )
                     }
 
-                    onMessageReceived(text, senderName, senderPhone, lat, lng)
+                    onMessageReceived(messageId, text, senderName, senderPhone, lat, lng)
 
                     val endpointsToForward = connectedEndpoints.filter { it != endpointId }
                     if (endpointsToForward.isNotEmpty()) {
@@ -248,7 +249,8 @@ class NearbyConnectionManager(
 
                 } catch (e: Exception) {
                     val rawText = String(bytes, StandardCharsets.UTF_8)
-                    onMessageReceived(rawText, "Unknown", "Unknown", null, null)
+                    val fallbackId = UUID.randomUUID().toString()
+                    onMessageReceived(fallbackId, rawText, "Unknown", "Unknown", null, null)
                 }
             }
         }

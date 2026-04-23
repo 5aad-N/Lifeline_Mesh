@@ -71,20 +71,17 @@ class MeshService : Service() {
                 nearbyManager = NearbyConnectionManager(
                     context = this,
                     myName = userName,
-                    onMessageReceived = { incomingText, incomingName, incomingPhone, lat, lng ->
+                    onMessageReceived = { incomingId, incomingText, incomingName, incomingPhone, lat, lng ->
 
-                        // 1. Determine Priority based on our Metadata Prefix!
                         val isEncryptedP3 = incomingText.startsWith("[P3_ENCRYPTED]")
                         val priorityLevel = if (isEncryptedP3) 3 else 1
 
-                        // 2. Save it to the Data Mule's Database for Store-and-Forward
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                             val dao = com.example.lifelinemesh.data.AppDatabase.getDatabase(applicationContext).messageDao()
-                            // Generate a unique ID if one wasn't passed by the transport layer
-                            val uniqueId = UUID.randomUUID().toString()
+
                             dao.insertMessage(
                                 com.example.lifelinemesh.data.MessageEntity(
-                                    id = uniqueId,
+                                    id = incomingId, // FIX: Use the REAL ID!
                                     text = incomingText,
                                     isFromMe = false,
                                     senderName = incomingName,
@@ -92,7 +89,7 @@ class MeshService : Service() {
                                     latitude = lat,
                                     longitude = lng,
                                     timestamp = System.currentTimeMillis(),
-                                    priority = priorityLevel // SORTED CORRECTLY!
+                                    priority = priorityLevel
                                 )
                             )
                         }
