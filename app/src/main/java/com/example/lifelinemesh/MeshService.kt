@@ -116,6 +116,16 @@ class MeshService : Service() {
                 nearbyManager.startAdvertising()
                 nearbyManager.startDiscovery()
                 broadcastStatusUpdate("Radio Active", 0)
+            } else {
+                val currentConnections = nearbyManager.getConnectedEndpointsCount()
+
+                val statusText = if (currentConnections > 0) {
+                    "Connected to $currentConnections device(s)"
+                } else {
+                    "Radio Active"
+                }
+
+                broadcastStatusUpdate(statusText, currentConnections)
             }
         }
 

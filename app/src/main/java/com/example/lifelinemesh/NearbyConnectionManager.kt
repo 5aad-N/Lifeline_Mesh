@@ -53,6 +53,10 @@ class NearbyConnectionManager(
         Nearby.getConnectionsClient(context).stopDiscovery()
     }
 
+    fun getConnectedEndpointsCount(): Int {
+        return connectedEndpoints.size
+    }
+
     fun sendData(messageId: String, message: String, senderName: String, senderPhone: String, lat: Double? = null, lng: Double? = null) {
         seenMessageIds.add(messageId)
 
@@ -146,6 +150,10 @@ class NearbyConnectionManager(
                 .requestConnection(myName, endpointId, connectionLifecycleCallback)
                 .addOnFailureListener { e ->
                     pendingConnections.remove(endpointId)
+
+                    if (e is ApiException && e.statusCode == ConnectionsStatusCodes.STATUS_ALREADY_CONNECTED_TO_ENDPOINT) {
+                        return@addOnFailureListener
+                    }
 
                     if (e !is ApiException || e.statusCode != ConnectionsStatusCodes.STATUS_ENDPOINT_IO_ERROR) {
                         onStatusUpdate("Request Failed: ${e.message}")
