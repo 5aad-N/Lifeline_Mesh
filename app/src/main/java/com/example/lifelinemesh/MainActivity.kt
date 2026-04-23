@@ -51,6 +51,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import kotlinx.coroutines.withContext
 import android.annotation.SuppressLint
+import androidx.compose.material.icons.filled.ExitToApp
 
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
@@ -64,9 +65,11 @@ data class ChatMessage(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+// ADDED isRescueWorker FLAG
 data class UserProfile(
     val name: String,
-    val phoneNumber: String
+    val phoneNumber: String,
+    val isRescueWorker: Boolean = false
 )
 
 class MainActivity : ComponentActivity() {
@@ -98,26 +101,46 @@ class MainActivity : ComponentActivity() {
 fun AppContent(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("lifeline_prefs", Context.MODE_PRIVATE) }
+
+    // UPDATED to load the rescue worker flag from storage
     var currentUser by remember {
         mutableStateOf(
             prefs.getString("user_name", null)?.let { name ->
-                UserProfile(name, prefs.getString("user_phone", "") ?: "")
+                UserProfile(
+                    name = name,
+                    phoneNumber = prefs.getString("user_phone", "") ?: "",
+                    isRescueWorker = prefs.getBoolean("is_rescue_worker", false)
+                )
             }
         )
     }
 
     if (currentUser == null) {
         LoginScreen(
-            onLoginSuccess = { name, phone ->
-                prefs.edit().putString("user_name", name).putString("user_phone", phone).apply()
-                currentUser = UserProfile(name, phone)
+            onLoginSuccess = { name, phone, isRescueWorker ->
+                // UPDATED to save the flag to disk
+                prefs.edit()
+                    .putString("user_name", name)
+                    .putString("user_phone", phone)
+                    .putBoolean("is_rescue_worker", isRescueWorker)
+                    .apply()
+                currentUser = UserProfile(name, phone, isRescueWorker)
             },
             modifier = modifier
         )
     } else {
         PermissionWrapper(
             onPermissionsGranted = {
-                ChatScreen(user = currentUser!!, modifier = modifier)
+                ChatScreen(
+                    user = currentUser!!,
+                    onLogout = {
+                        // Wipe the local disk
+                        prefs.edit().clear().apply()
+                        // Reset the state so the UI instantly jumps back to LoginScreen
+                        currentUser = null
+                    },
+                    modifier = modifier
+                )
             }
         )
     }
@@ -216,12 +239,12 @@ fun PermissionWrapper(onPermissionsGranted: @Composable () -> Unit) {
     }
 }
 
+// UPDATED to accept the boolean flag
 @Composable
 fun LoginScreen(
-    onLoginSuccess: (String, String) -> Unit,
+    onLoginSuccess: (String, String, Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // ... (Keep this exactly the same as your previous code) ...
     var nameInput by remember { mutableStateOf("") }
     var phoneInput by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
@@ -273,7 +296,12 @@ fun LoginScreen(
         Button(
             onClick = {
                 if (nameInput.isNotBlank() && phoneInput.isNotBlank()) {
-                    onLoginSuccess(nameInput, phoneInput)
+                    // SECRET ADMIN LOGIN LOGIC
+                    if (nameInput == "ADMIN-RESCUE-999") {
+                        onLoginSuccess("Rescue", phoneInput, true)
+                    } else {
+                        onLoginSuccess(nameInput, phoneInput, false)
+                    }
                 } else {
                     errorMessage = "Please fill in all fields."
                 }
@@ -287,7 +315,7 @@ fun LoginScreen(
 
 @SuppressLint("MissingPermission")
 @Composable
-fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
+fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val messages = remember { mutableStateListOf<ChatMessage>() }
@@ -328,7 +356,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
         }
     }
 
-    // The UI is just a "Listener". It listens for Intents broadcasted by the MeshService.
+    // Listen for Intents broadcasted by the MeshService
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     DisposableEffect(context) {
         val receiver = object : android.content.BroadcastReceiver() {
@@ -406,6 +434,15 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold
                         )
+                        IconButton(
+                            onClick = { onLogout() }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ExitToApp, // Or any edit/logout icon
+                                contentDescription = "Edit Profile",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
 
                         IconButton(
                             onClick = {
@@ -445,7 +482,8 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                 val showHeader = isFirstMessage || previousMessage?.isSystemEvent == true ||
                         previousMessage?.senderName != message.senderName || previousMessage.isFromMe != message.isFromMe
 
-                MessageBubble(message = message, showHeader = showHeader)
+                // PASS THE isRescueWorker FLAG TO THE BUBBLE!
+                MessageBubble(message = message, showHeader = showHeader, isRescueWorker = user.isRescueWorker)
             }
         }
 
@@ -462,34 +500,54 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                                 .addOnSuccessListener { location ->
                                     if (location != null) {
                                         val alertText = "🚨 Emergency Location Shared"
+
+                                        // 1. ENCRYPT THE DATA IMMEDIATELY (Before it touches the UI or DB!)
+                                        val cipherData = CryptoHelper.encryptPriority3Payload(
+                                            text = alertText,
+                                            name = user.name,
+                                            phone = user.phoneNumber,
+                                            lat = location.latitude,
+                                            lng = location.longitude
+                                        )
+                                        val securePayload = "[P3_ENCRYPTED]$cipherData"
+
+                                        // 2. Create the ChatMessage for the UI (Coordinates are NULL so they stay off the screen)
                                         val newLocationMessage = ChatMessage(
-                                            text = alertText, isFromMe = true, senderName = user.name,
-                                            senderPhone = user.phoneNumber, latitude = location.latitude, longitude = location.longitude
+                                            text = securePayload,
+                                            isFromMe = true,
+                                            senderName = user.name,
+                                            senderPhone = user.phoneNumber,
+                                            latitude = null, // DO NOT STORE IN MEMORY
+                                            longitude = null // DO NOT STORE IN MEMORY
                                         )
                                         messages.add(newLocationMessage)
 
-                                        // 1. Save to Database
+                                        // 3. Save the SECURE version to the Local SQLite Database
                                         scope.launch(Dispatchers.IO) {
                                             val dao = AppDatabase.getDatabase(context).messageDao()
                                             dao.insertMessage(
                                                 MessageEntity(
-                                                    id = newLocationMessage.id, text = alertText, isFromMe = true,
-                                                    senderName = user.name, senderPhone = user.phoneNumber,
-                                                    latitude = location.latitude, longitude = location.longitude,
-                                                    timestamp = System.currentTimeMillis(), priority = 3
+                                                    id = newLocationMessage.id,
+                                                    text = securePayload, // This is now the unreadable ciphertext!
+                                                    isFromMe = true,
+                                                    senderName = user.name,
+                                                    senderPhone = user.phoneNumber,
+                                                    latitude = null, // SAFE!
+                                                    longitude = null, // SAFE!
+                                                    timestamp = System.currentTimeMillis(),
+                                                    priority = 3
                                                 )
                                             )
                                         }
 
-                                        // 2. Tell the MeshService to forward it
+                                        // 4. Send to MeshService (Pass false for isEmergency because we already encrypted it here!)
                                         val sendIntent = Intent(context, MeshService::class.java).apply {
                                             action = "SEND_PAYLOAD"
                                             putExtra("id", newLocationMessage.id)
-                                            putExtra("text", alertText)
-                                            putExtra("name", user.name)
-                                            putExtra("phone", user.phoneNumber)
-                                            putExtra("lat", location.latitude)
-                                            putExtra("lng", location.longitude)
+                                            putExtra("text", securePayload)
+                                            putExtra("name", "Encrypted User") // Scrub metadata
+                                            putExtra("phone", "Hidden") // Scrub metadata
+                                            putExtra("isEmergency", false) // Prevent double-encryption
                                         }
                                         context.startService(sendIntent)
 
@@ -523,7 +581,6 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                         val newChatMessage = ChatMessage(text = msgToSend, isFromMe = true, senderName = user.name, senderPhone = user.phoneNumber)
                         messages.add(newChatMessage)
 
-                        // 1. Save to Database
                         scope.launch(Dispatchers.IO) {
                             val dao = AppDatabase.getDatabase(context).messageDao()
                             dao.insertMessage(
@@ -536,7 +593,7 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
                             )
                         }
 
-                        // 2. Tell the MeshService to forward it
+                        // Standard message: no isEmergency flag.
                         val sendIntent = Intent(context, MeshService::class.java).apply {
                             action = "SEND_PAYLOAD"
                             putExtra("id", newChatMessage.id)
@@ -556,8 +613,10 @@ fun ChatScreen(user: UserProfile, modifier: Modifier = Modifier) {
     }
 }
 
+// UPDATED: Dynamically changes view depending on if user is Sender, Mule, or Rescue Worker
 @Composable
-fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
+fun MessageBubble(message: ChatMessage, showHeader: Boolean = true, isRescueWorker: Boolean = false) {
+
     if (message.isSystemEvent) {
         Box(
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -565,64 +624,114 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
         ) {
             Text(text = message.text, style = MaterialTheme.typography.labelMedium, color = Color.Gray)
         }
-    } else {
-        val bubbleColor = if (message.isFromMe) MaterialTheme.colorScheme.primary else Color.LightGray
-        val textColor = if (message.isFromMe) Color.White else Color.Black
-        val alignment = if (message.isFromMe) Alignment.End else Alignment.Start
+        return
+    }
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = alignment
+    val isEncrypted = message.text.startsWith("[P3_ENCRYPTED]")
+
+    var displayText = message.text
+    var displayLat = message.latitude
+    var displayLng = message.longitude
+    var displayName = message.senderName
+    var displayPhone = message.senderPhone
+    var showLockIcon = false
+
+    if (isEncrypted) {
+        if (message.isFromMe) {
+            // Sender sees their own message normally, just with a lock icon.
+            displayText = "🚨 Emergency Location Shared"
+            showLockIcon = true
+        } else if (isRescueWorker) {
+            // Rescue Worker intercepts and decrypts!
+            val cipherText = message.text.removePrefix("[P3_ENCRYPTED]")
+            val decryptedData = CryptoHelper.decryptPriority3Payload(cipherText)
+
+            if (decryptedData != null) {
+                displayText = decryptedData.optString("text", "Decrypted Signal")
+                displayName = decryptedData.optString("name", "Unknown")
+                displayPhone = decryptedData.optString("phone", "Unknown")
+                displayLat = if (decryptedData.has("lat") && !decryptedData.isNull("lat")) decryptedData.getDouble("lat") else null
+                displayLng = if (decryptedData.has("lng") && !decryptedData.isNull("lng")) decryptedData.getDouble("lng") else null
+                showLockIcon = true
+            } else {
+                displayText = "⚠️ Decryption Failed"
+            }
+        } else {
+            // Data Mule sees a generic lock message. PII is hidden.
+            displayText = "🔒 Encrypted Distress Signal Routing to Authorities."
+            displayName = "Encrypted User"
+            displayPhone = "Hidden"
+            displayLat = null
+            displayLng = null
+        }
+    }
+
+    val bubbleColor = if (message.isFromMe) MaterialTheme.colorScheme.primary else Color.LightGray
+    val textColor = if (message.isFromMe) Color.White else Color.Black
+    val alignment = if (message.isFromMe) Alignment.End else Alignment.Start
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = alignment
+    ) {
+        Surface(
+            color = bubbleColor,
+            shape = RoundedCornerShape(
+                topStart = 12.dp,
+                topEnd = 12.dp,
+                bottomStart = if (message.isFromMe || !showHeader) 12.dp else 2.dp,
+                bottomEnd = if (!message.isFromMe || !showHeader) 12.dp else 2.dp
+            ),
+            modifier = Modifier.padding(
+                start = 8.dp,
+                top = if (showHeader) 8.dp else 2.dp,
+                end = 8.dp,
+                bottom = 2.dp
+            )
         ) {
-            Surface(
-                color = bubbleColor,
-                shape = RoundedCornerShape(
-                    topStart = 12.dp,
-                    topEnd = 12.dp,
-                    bottomStart = if (message.isFromMe || !showHeader) 12.dp else 2.dp,
-                    bottomEnd = if (!message.isFromMe || !showHeader) 12.dp else 2.dp
-                ),
-                modifier = Modifier.padding(
-                    start = 8.dp,
-                    top = if (showHeader) 8.dp else 2.dp,
-                    end = 8.dp,
-                    bottom = 2.dp
-                )
-            ) {
-                Column(modifier = Modifier.padding(8.dp)) {
-                    if (showHeader && !message.isFromMe && message.senderName.isNotEmpty()) {
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = message.senderName,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "~ ${message.senderPhone}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.DarkGray
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
+            Column(modifier = Modifier.padding(8.dp)) {
+
+                if (showHeader && !message.isFromMe && displayName.isNotEmpty()) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            text = displayName,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "~ $displayPhone",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.DarkGray
+                        )
                     }
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
 
-                    Text(text = message.text, color = textColor)
+                if (showLockIcon) {
+                    Text(
+                        text = "🔒 Secured via Asymmetric Key",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (message.isFromMe) Color.LightGray else Color(0xFF2E7D32)
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
 
-                    if (message.latitude != null && message.longitude != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text(
-                                text = "Lat: ${"%.4f".format(message.latitude)}\nLng: ${"%.4f".format(message.longitude)}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = textColor,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
+                Text(text = displayText, color = textColor)
+
+                if (displayLat != null && displayLng != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "Lat: ${"%.4f".format(displayLat)}\nLng: ${"%.4f".format(displayLng)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = textColor,
+                            modifier = Modifier.padding(8.dp)
+                        )
                     }
                 }
             }
@@ -634,6 +743,6 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true) {
 @Composable
 fun AppPreview() {
     LifelineMeshTheme {
-        LoginScreen(onLoginSuccess = { _, _ -> })
+        LoginScreen(onLoginSuccess = { _, _, _ -> })
     }
 }

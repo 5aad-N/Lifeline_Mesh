@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 class MeshService : Service() {
@@ -70,12 +71,37 @@ class MeshService : Service() {
                 nearbyManager = NearbyConnectionManager(
                     context = this,
                     myName = userName,
-                    onMessageReceived = { text, name, phone, lat, lng ->
-                        // Pass incoming payloads to the UI
+                    onMessageReceived = { incomingText, incomingName, incomingPhone, lat, lng ->
+
+                        // 1. Determine Priority based on our Metadata Prefix!
+                        val isEncryptedP3 = incomingText.startsWith("[P3_ENCRYPTED]")
+                        val priorityLevel = if (isEncryptedP3) 3 else 1
+
+                        // 2. Save it to the Data Mule's Database for Store-and-Forward
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                            val dao = com.example.lifelinemesh.data.AppDatabase.getDatabase(applicationContext).messageDao()
+                            // Generate a unique ID if one wasn't passed by the transport layer
+                            val uniqueId = UUID.randomUUID().toString()
+                            dao.insertMessage(
+                                com.example.lifelinemesh.data.MessageEntity(
+                                    id = uniqueId,
+                                    text = incomingText,
+                                    isFromMe = false,
+                                    senderName = incomingName,
+                                    senderPhone = incomingPhone,
+                                    latitude = lat,
+                                    longitude = lng,
+                                    timestamp = System.currentTimeMillis(),
+                                    priority = priorityLevel // SORTED CORRECTLY!
+                                )
+                            )
+                        }
+
+                        // 3. Pass it to the UI
                         val uiIntent = Intent("MESH_MESSAGE_RECEIVED").apply {
-                            putExtra("text", text)
-                            putExtra("name", name)
-                            putExtra("phone", phone)
+                            putExtra("text", incomingText)
+                            putExtra("name", incomingName)
+                            putExtra("phone", incomingPhone)
                             if (lat != null) putExtra("lat", lat)
                             if (lng != null) putExtra("lng", lng)
                         }
@@ -103,13 +129,26 @@ class MeshService : Service() {
                 val text = intent.getStringExtra("text") ?: ""
                 val name = intent.getStringExtra("name") ?: ""
                 val phone = intent.getStringExtra("phone") ?: ""
-                val lat = if (intent.hasExtra("lat")) intent.getDoubleExtra("lat", 0.0) else null
-                val lng = if (intent.hasExtra("lng")) intent.getDoubleExtra("lng", 0.0) else null
 
-                nearbyManager.sendData(id, text, name, phone, lat, lng)
+                // Check if this is a standard message or an emergency
+                val isEmergency = intent.getBooleanExtra("isEmergency", false)
+
+                if (isEmergency) {
+                    val lat = intent.getDoubleExtra("lat", 0.0)
+                    val lng = intent.getDoubleExtra("lng", 0.0)
+
+                    // ENCRYPT THE SENSITIVE DATA
+                    val cipherData = CryptoHelper.encryptPriority3Payload(text, name, phone, lat, lng)
+                    val payloadText = "[P3_ENCRYPTED]$cipherData"
+
+                    // Send the encrypted payload over the radio. Metadata is anonymized!
+                    nearbyManager.sendData(id, payloadText, "Encrypted User", "Hidden", null, null)
+                } else {
+                    // Send standard message in plaintext
+                    nearbyManager.sendData(id, text, name, phone, null, null)
+                }
             }
         }
-
         // If the OS kills us for memory, START_STICKY tells it to resurrect us!
         return START_STICKY
     }
