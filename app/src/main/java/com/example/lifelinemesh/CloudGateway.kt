@@ -12,9 +12,7 @@ import java.net.URL
 
 object CloudGateway {
 
-    // Replace this with your own Discord or Telegram Webhook URL!
-    // Example Discord: "https://discord.com/api/webhooks/12345/abcdefg"
-    private const val WEBHOOK_URL = "https://discordapp.com/api/webhooks/1496883880505114695/Ps2qIokCjnfc0I03kq3l0CvmcIZfUFKk7oLzBRx2AgYu6iiKJOC50zy4Sa1aILs4qjEs"
+    private const val WEBHOOK_URL = BuildConfig.DISCORD_WEBHOOK_URL
 
     // We keep a lightweight RAM cache of IDs we've already uploaded so we don't spam the server
     private val uploadedMessageIds = mutableSetOf<String>()
