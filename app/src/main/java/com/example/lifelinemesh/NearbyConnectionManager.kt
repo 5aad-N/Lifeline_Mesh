@@ -61,7 +61,7 @@ class NearbyConnectionManager(
         seenMessageIds.add(messageId)
 
         val jsonEnvelope = JSONObject()
-        jsonEnvelope.put("messageId", messageId) // <-- NEW: Stamp the envelope
+        jsonEnvelope.put("messageId", messageId)
         jsonEnvelope.put("text", message)
         jsonEnvelope.put("senderName", senderName)
         jsonEnvelope.put("senderPhone", senderPhone)

@@ -102,7 +102,6 @@ fun AppContent(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("lifeline_prefs", Context.MODE_PRIVATE) }
 
-    // UPDATED to load the rescue worker flag from storage
     var currentUser by remember {
         mutableStateOf(
             prefs.getString("user_name", null)?.let { name ->
@@ -118,7 +117,6 @@ fun AppContent(modifier: Modifier = Modifier) {
     if (currentUser == null) {
         LoginScreen(
             onLoginSuccess = { name, phone, isRescueWorker ->
-                // UPDATED to save the flag to disk
                 prefs.edit()
                     .putString("user_name", name)
                     .putString("user_phone", phone)
@@ -239,7 +237,6 @@ fun PermissionWrapper(onPermissionsGranted: @Composable () -> Unit) {
     }
 }
 
-// UPDATED to accept the boolean flag
 @Composable
 fun LoginScreen(
     onLoginSuccess: (String, String, Boolean) -> Unit,
@@ -669,7 +666,6 @@ fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Mod
     }
 }
 
-// UPDATED: Dynamically changes view depending on if user is Sender, Mule, or Rescue Worker
 @Composable
 fun MessageBubble(message: ChatMessage, showHeader: Boolean = true, isRescueWorker: Boolean = false) {
 
@@ -698,7 +694,7 @@ fun MessageBubble(message: ChatMessage, showHeader: Boolean = true, isRescueWork
             displayText = "🔒 Encrypted SOS Signal Sent"
             showLockIcon = true
         } else if (isRescueWorker) {
-            // Rescue Worker intercepts and decrypts!
+            // Rescue Worker intercepts and decrypts
             val cipherText = message.text.removePrefix("[P3_ENCRYPTED]")
             val decryptedData = CryptoHelper.decryptPriority3Payload(cipherText)
 

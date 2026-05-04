@@ -27,7 +27,7 @@ class MeshService : Service() {
     private var isSurvivalModeActive = false
     private var userName = "Unknown"
 
-    // 1. The Battery Listener is now safely in the Background Service!
+    // The Battery Listener is now safely in the Background Service
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_BATTERY_CHANGED) {
@@ -70,7 +70,7 @@ class MeshService : Service() {
             override fun onAvailable(network: Network) {
                 super.onAvailable(network)
                 Log.d("CloudGateway", "Internet Connected! Attempting database offload...")
-                // The moment Wi-Fi or Cellular is found, blast the distress signals!
+                // The moment Wi-Fi or Cellular is found, blast the distress signals
                 CloudGateway.attemptOffload(applicationContext)
             }
         }
@@ -88,7 +88,7 @@ class MeshService : Service() {
         if (intent?.hasExtra("USER_NAME") == true) {
             userName = intent.getStringExtra("USER_NAME") ?: "Unknown"
 
-            // 2. Initialize the Radio if it hasn't been started yet
+            // Initialize the Radio if it hasn't been started yet
             if (!::nearbyManager.isInitialized) {
                 nearbyManager = NearbyConnectionManager(
                     context = this,
@@ -115,13 +115,11 @@ class MeshService : Service() {
                                 )
                             )
 
-                            // NEW: If this is an emergency and the Mule ALREADY has internet, upload it!
                             if (priorityLevel == 3) {
                                 CloudGateway.attemptOffload(applicationContext)
                             }
                         }
 
-                        // 3. Pass it to the UI
                         val uiIntent = Intent("MESH_MESSAGE_RECEIVED").apply {
                             putExtra("text", incomingText)
                             putExtra("name", incomingName)
@@ -156,7 +154,6 @@ class MeshService : Service() {
             }
         }
 
-        // 3. Catch Intents from the UI when the user presses the "Send" button
         if (intent?.action == "SEND_PAYLOAD") {
             if (::nearbyManager.isInitialized) {
                 val id = intent.getStringExtra("id") ?: UUID.randomUUID().toString()

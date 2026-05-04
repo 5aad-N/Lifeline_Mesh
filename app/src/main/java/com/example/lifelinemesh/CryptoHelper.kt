@@ -6,7 +6,6 @@ import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
 object CryptoHelper {
-    // The "Emergency Key" distributed to the App and Rescue Workers
     private const val EMERGENCY_KEY_STRING = "LifelineMeshEmergencyKey12345678"
     private val secretKey = SecretKeySpec(EMERGENCY_KEY_STRING.toByteArray(), "AES")
 

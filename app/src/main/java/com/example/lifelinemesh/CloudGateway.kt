@@ -37,7 +37,6 @@ object CloudGateway {
 
                     var alertText = "🚨 **RAW ENCRYPTED DISTRESS SIGNAL**\nID: ${msg.id}\nPayload: ${msg.text}"
 
-                    // For the Viva Demo: We decrypt it here to make the phone notification look cool!
                     if (msg.text.startsWith("[P3_ENCRYPTED]")) {
                         val cipherText = msg.text.removePrefix("[P3_ENCRYPTED]")
                         val decrypted = CryptoHelper.decryptPriority3Payload(cipherText)
@@ -89,7 +88,6 @@ object CloudGateway {
             connection.setRequestProperty("Content-Type", "application/json")
             connection.doOutput = true
 
-            // Format for Discord Webhook (Change key to "text" if using Telegram/Slack)
             val jsonPayload = JSONObject().apply {
                 put("content", content)
             }
