@@ -26,8 +26,8 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        val webhookUrl: String = localProperties.getProperty("DISCORD_WEBHOOK", "")
-        buildConfigField("String", "DISCORD_WEBHOOK_URL", "\"$webhookUrl\"")
+        val webhookUrl: String = localProperties.getProperty("WEBHOOK_URL", "")
+        buildConfigField("String", "WEBHOOK_URL", "\"$webhookUrl\"")
     }
 
     buildFeatures {

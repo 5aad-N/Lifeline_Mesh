@@ -12,7 +12,7 @@ import java.net.URL
 
 object CloudGateway {
 
-    private const val WEBHOOK_URL = BuildConfig.DISCORD_WEBHOOK_URL
+    private const val WEBHOOK_URL = BuildConfig.WEBHOOK_URL
 
     // We keep a lightweight RAM cache of IDs we've already uploaded so we don't spam the server
     private val uploadedMessageIds = mutableSetOf<String>()
