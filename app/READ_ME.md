@@ -20,6 +20,19 @@ Located in the `app/simulation/` directory.
 
 ## 2. Executable Requirement & Running the Software
 
+**Environment Setup (Configuring the Webhook URL)**
+Before compiling the application, you must provide a valid Webhook URL so the CloudGateway knows where to offload emergency distress signals when internet connectivity is restored.
+
+Open the project directory.
+
+Locate the local.properties file in the root folder (if it does not exist, create a new file named local.properties).
+
+Add your Webhook URL environment variable to this file. For example:
+
+Properties
+WEBHOOK_URL="https://your-rescue-server-endpoint.com/webhook"
+(Note: If you do not have a live server, you can use a free testing service like Webhook.site to monitor incoming payloads).
+
 **Why there is no traditional executable (.exe / .app):**
 Because this project is a native Android mobile application, it cannot be compiled into a traditional desktop executable file. Instead, Android applications are compiled into **.apk** (Android Package) files. Furthermore, because the application relies on physical hardware sensors (Bluetooth Low Energy, Wi-Fi Direct, and GPS antennas), it cannot be accurately tested on a desktop computer.
 
