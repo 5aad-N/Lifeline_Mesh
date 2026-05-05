@@ -244,6 +244,8 @@ fun LoginScreen(
     var phoneInput by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
 
+    var consentChecked by remember { mutableStateOf(false) }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -281,24 +283,49 @@ fun LoginScreen(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
         )
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = consentChecked,
+                    onCheckedChange = { consentChecked = it }
+                )
+                Text(
+                    text = "I explicitly consent to my device being utilized as an autonomous background router to relay encrypted disaster communications.",
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
 
         if (errorMessage.isNotEmpty()) {
-            Text(errorMessage, color = Color.Red)
+            Text(errorMessage, color = Color.Red, style = MaterialTheme.typography.bodyMedium)
             Spacer(modifier = Modifier.height(8.dp))
         }
 
         Button(
             onClick = {
-                if (nameInput.isNotBlank() && phoneInput.isNotBlank()) {
-                    // SECRET ADMIN LOGIN LOGIC
+                if (nameInput.isBlank() || phoneInput.isBlank()) {
+                    errorMessage = "Please fill in all fields."
+                } else if (!consentChecked) {
+                    errorMessage = "You must provide legal consent to join the mesh."
+                } else {
+                    errorMessage = ""
                     if (nameInput == "ADMIN-RESCUE-999") {
                         onLoginSuccess("Rescue", phoneInput, true)
                     } else {
                         onLoginSuccess(nameInput, phoneInput, false)
                     }
-                } else {
-                    errorMessage = "Please fill in all fields."
                 }
             },
             modifier = Modifier.fillMaxWidth()
