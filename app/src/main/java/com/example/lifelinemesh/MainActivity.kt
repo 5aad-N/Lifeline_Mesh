@@ -40,8 +40,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.lifelinemesh.ui.theme.LifelineMeshTheme
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -325,7 +323,7 @@ fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Mod
     var activeConnections by remember { mutableIntStateOf(0) }
 
     val focusManager = LocalFocusManager.current
-    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val locationManager = remember { context.getSystemService(Context.LOCATION_SERVICE) as LocationManager }
     val listState = rememberLazyListState()
     val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
 
@@ -492,18 +490,46 @@ fun ChatScreen(user: UserProfile, onLogout: () -> Unit, modifier: Modifier = Mod
 
                         // Determine if we need to fetch GPS or send instantly
                         if (includeLocation) {
-                            Toast.makeText(context, "Acquiring GPS lock...", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Acquiring hardware GPS lock (step outside)...", Toast.LENGTH_LONG).show()
                             try {
                                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                                    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-                                        .addOnSuccessListener { location ->
-                                            if (location != null) {
+
+                                    var hasLocked = false
+                                    val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+                                    val locationListener = object : android.location.LocationListener {
+                                        override fun onLocationChanged(location: android.location.Location) {
+                                            if (!hasLocked) {
+                                                hasLocked = true
+                                                locationManager.removeUpdates(this)
                                                 dispatchEmergency(location.latitude, location.longitude)
-                                            } else {
-                                                Toast.makeText(context, "GPS failed. Sending text only.", Toast.LENGTH_SHORT).show()
-                                                dispatchEmergency(null, null)
                                             }
                                         }
+
+                                        override fun onProviderDisabled(provider: String) {}
+                                        override fun onProviderEnabled(provider: String) {}
+                                        @Deprecated("Deprecated in Java")
+                                        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                                    }
+
+                                    // Force the GPS radio ON directly
+                                    locationManager.requestLocationUpdates(
+                                        LocationManager.GPS_PROVIDER,
+                                        0L,
+                                        0f,
+                                        locationListener,
+                                        android.os.Looper.getMainLooper()
+                                    )
+
+                                    // Set a realistic custom timeout for an offline cold start (2 minutes)
+                                    mainHandler.postDelayed({
+                                        if (!hasLocked) {
+                                            hasLocked = true
+                                            locationManager.removeUpdates(locationListener)
+                                            Toast.makeText(context, "GPS lock timed out. Sending text only.", Toast.LENGTH_LONG).show()
+                                            dispatchEmergency(null, null)
+                                        }
+                                    }, 120_000L)
                                 }
                             } catch (e: SecurityException) {
                                 dispatchEmergency(null, null)
